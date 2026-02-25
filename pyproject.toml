@@ -1,0 +1,15 @@
+[project]
+name = "fastapi-throttled-py-integration"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi[standard]>=0.129.2",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.39.1",
+    "opentelemetry-sdk>=1.39.1",
+    "throttled-py[otel]>=3.1.1",
+    "uvicorn>=0.41.0",
+]
+
+[tool.uv.sources]
+throttled-py = { git = "https://github.com/ZhuoZhuoCrayon/throttled-py.git", rev = "main" }
