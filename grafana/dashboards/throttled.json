@@ -3,19 +3,40 @@
   "title": "Throttled Rate Limit",
   "time": { "from": "now-5m", "to": "now" },
   "refresh": "5s",
+  "templating": {
+    "list": [
+      {
+        "name": "algorithm",
+        "type": "query",
+        "query": "label_values(throttled_requests_total, algorithm)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
   "panels": [
+    {
+      "id": 100,
+      "title": "$algorithm",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "repeat": "algorithm",
+      "collapsed": false
+    },
     {
       "id": 1,
       "title": "Requests / sec (allowed vs denied)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
       "targets": [
         {
-          "expr": "rate(throttled_requests_total{result=\"allowed\"}[1m])",
+          "expr": "rate(throttled_requests_total{result=\"allowed\", algorithm=\"$algorithm\"}[1m])",
           "legendFormat": "allowed"
         },
         {
-          "expr": "rate(throttled_requests_total{result=\"denied\"}[1m])",
+          "expr": "rate(throttled_requests_total{result=\"denied\", algorithm=\"$algorithm\"}[1m])",
           "legendFormat": "denied"
         }
       ],
@@ -40,10 +61,10 @@
       "id": 2,
       "title": "Denied ratio",
       "type": "gauge",
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 1 },
       "targets": [
         {
-          "expr": "sum(throttled_requests_total{result=\"denied\"}) / clamp_min(sum(throttled_requests_total), 1)",
+          "expr": "sum(throttled_requests_total{result=\"denied\", algorithm=\"$algorithm\"}) / clamp_min(sum(throttled_requests_total{algorithm=\"$algorithm\"}), 1)",
           "legendFormat": "denied %"
         }
       ],
@@ -66,10 +87,10 @@
       "id": 3,
       "title": "Total requests",
       "type": "stat",
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 1 },
       "targets": [
         {
-          "expr": "throttled_requests_total",
+          "expr": "throttled_requests_total{algorithm=\"$algorithm\"}",
           "legendFormat": "{{ result }}"
         }
       ],
@@ -83,18 +104,18 @@
       "id": 4,
       "title": "Rate limit check latency (p50 / p95 / p99)",
       "type": "timeseries",
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(throttled_duration_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm=\"$algorithm\"}[1m])))",
           "legendFormat": "p50"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(throttled_duration_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm=\"$algorithm\"}[1m])))",
           "legendFormat": "p95"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(throttled_duration_seconds_bucket[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm=\"$algorithm\"}[1m])))",
           "legendFormat": "p99"
         }
       ],
