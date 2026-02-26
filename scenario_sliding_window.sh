@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 5-minute load scenario for throttled rate limit dashboard
+# 5-minute load scenario — sliding_window
 # Rate limit: 500 req/min (~8.3 req/s)
 
-URL="http://localhost:8000/api/pay"
+URL="http://localhost:8002/api/pay"
 
 send() {
   local rps=$1 duration=$2 label=$3
