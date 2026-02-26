@@ -6,10 +6,10 @@ rate limit: **500 req/min** (`per_min(500)`, ~8.3 req/s)
 
 ```bash
 # 1. 인프라
-docker compose up
+make up
 
-# 2. 앱 (별도 터미널)
-uv run uvicorn metric_check:app --reload
+# 2. 앱 기동 (예: token bucket)
+make app-token-bucket
 
 # 3. Grafana
 open http://localhost:3000
@@ -19,7 +19,14 @@ open http://localhost:3000
 ## Scenario (5 min)
 
 ```bash
-bash scenario.sh
+# 개별 실행
+make scenario-token-bucket
+
+# 또는 원커맨드 (앱 기동 + 시나리오 + 종료)
+make run-token-bucket
+
+# 전체 알고리즘 병렬
+make run-all
 ```
 
 | Phase | Time | Rate | Expected |
