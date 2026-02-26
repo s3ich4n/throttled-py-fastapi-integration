@@ -38,6 +38,7 @@ hook = OTelHook(meter)
 
 throttle = Throttled(
     key="/api/pay",
+    using="fixed_window",
     quota=rate_limiter.per_min(500),
     hooks=[hook],
 )
