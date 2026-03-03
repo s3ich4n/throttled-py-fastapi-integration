@@ -12,4 +12,4 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-throttled-py = { git = "https://github.com/ZhuoZhuoCrayon/throttled-py.git", rev = "main" }
+throttled-py = { git = "https://github.com/s3ich4n/throttled-py.git", rev = "feat/issue_37_async_hook" }

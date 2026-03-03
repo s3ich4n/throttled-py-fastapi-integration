@@ -1,4 +1,11 @@
 services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - otel-collector
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     volumes:

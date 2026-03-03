@@ -172,7 +172,7 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.129.2" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.39.1" },
     { name = "opentelemetry-sdk", specifier = ">=1.39.1" },
-    { name = "throttled-py", extras = ["otel"], git = "https://github.com/ZhuoZhuoCrayon/throttled-py.git?rev=main" },
+    { name = "throttled-py", extras = ["otel"], git = "https://github.com/s3ich4n/throttled-py.git?rev=feat%2Fissue_37_async_hook" },
     { name = "uvicorn", specifier = ">=0.41.0" },
 ]
 
@@ -814,7 +814,7 @@ wheels = [
 [[package]]
 name = "throttled-py"
 version = "3.1.1"
-source = { git = "https://github.com/ZhuoZhuoCrayon/throttled-py.git?rev=main#b5a1cfd6acaebebb8d501ad97e9c6e5c05178d65" }
+source = { git = "https://github.com/s3ich4n/throttled-py.git?rev=feat%2Fissue_37_async_hook#b22adb913d692b1fa368658bd29c7977a039a75b" }
 
 [package.optional-dependencies]
 otel = [

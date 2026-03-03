@@ -6,9 +6,15 @@
   "templating": {
     "list": [
       {
+        "name": "mode",
+        "type": "custom",
+        "query": "sync,async",
+        "current": { "text": "sync", "value": "sync" }
+      },
+      {
         "name": "algorithm",
         "type": "query",
-        "query": "label_values(throttled_requests_total, algorithm)",
+        "query": "label_values(throttled_requests_total{key=~\"/${mode}/.*\"}, algorithm)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -32,11 +38,11 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
       "targets": [
         {
-          "expr": "rate(throttled_requests_total{result=\"allowed\", algorithm=\"$algorithm\"}[1m])",
+          "expr": "rate(throttled_requests_total{result=\"allowed\", algorithm=\"$algorithm\", key=~\"/${mode}/.*\"}[1m])",
           "legendFormat": "allowed"
         },
         {
-          "expr": "rate(throttled_requests_total{result=\"denied\", algorithm=\"$algorithm\"}[1m])",
+          "expr": "rate(throttled_requests_total{result=\"denied\", algorithm=\"$algorithm\", key=~\"/${mode}/.*\"}[1m])",
           "legendFormat": "denied"
         }
       ],
@@ -64,7 +70,7 @@
       "gridPos": { "h": 8, "w": 6, "x": 12, "y": 1 },
       "targets": [
         {
-          "expr": "sum(throttled_requests_total{result=\"denied\", algorithm=\"$algorithm\"}) / clamp_min(sum(throttled_requests_total{algorithm=\"$algorithm\"}), 1)",
+          "expr": "sum(throttled_requests_total{result=\"denied\", algorithm=\"$algorithm\", key=~\"/${mode}/.*\"}) / clamp_min(sum(throttled_requests_total{algorithm=\"$algorithm\", key=~\"/${mode}/.*\"}), 1)",
           "legendFormat": "denied %"
         }
       ],
@@ -90,7 +96,7 @@
       "gridPos": { "h": 8, "w": 6, "x": 18, "y": 1 },
       "targets": [
         {
-          "expr": "throttled_requests_total{algorithm=\"$algorithm\"}",
+          "expr": "throttled_requests_total{algorithm=\"$algorithm\", key=~\"/${mode}/.*\"}",
           "legendFormat": "{{ result }}"
         }
       ],
@@ -107,15 +113,15 @@
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 9 },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm=\"$algorithm\"}[1m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm=\"$algorithm\", key=~\"/${mode}/.*\"}[1m])))",
           "legendFormat": "p50"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm=\"$algorithm\"}[1m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm=\"$algorithm\", key=~\"/${mode}/.*\"}[1m])))",
           "legendFormat": "p95"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm=\"$algorithm\"}[1m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm=\"$algorithm\", key=~\"/${mode}/.*\"}[1m])))",
           "legendFormat": "p99"
         }
       ],

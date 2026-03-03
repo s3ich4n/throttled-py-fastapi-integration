@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
-# 5-minute load scenario — sliding_window
+# 5-minute load scenario
 # Rate limit: 500 req/min (~8.3 req/s)
+#
+# Usage: bash scenario.sh <algorithm> [sync|async]
+#   algorithm: token_bucket, fixed_window, sliding_window, leaking_bucket, gcra
+#   mode:      sync (default) or async
 
-URL="http://localhost:8002/api/pay"
+ALGORITHM="${1:?Usage: $0 <algorithm> [sync|async]}"
+MODE="${2:-sync}"
+URL="http://localhost:8000/${MODE}/${ALGORITHM}/pay"
+
+echo "=== ${ALGORITHM} (${MODE}) ==="
+echo "    URL: ${URL}"
+echo
 
 send() {
   local rps=$1 duration=$2 label=$3
