@@ -6,12 +6,14 @@
 
 | 서비스 | 역할 |
 |--------|------|
-| FastAPI (`metric_check.py`) | throttled-py + OTelHook 적용 앱 |
+| FastAPI (`app.py`) | throttled-py + OTelHook/AsyncOTelHook 적용 앱 (Docker) |
 | OTel Collector | OTLP 수신 → Prometheus remote write |
 | Prometheus | 메트릭 저장소 |
 | Grafana | 대시보드 시각화 |
 
-### OTelHook이 기록하는 메트릭
+### OTelHook / AsyncOTelHook이 기록하는 메트릭
+
+sync(`OTelHook`)와 async(`AsyncOTelHook`) 모두 동일한 메트릭을 기록한다. `key` 레이블(`/sync/...` vs `/async/...`)로 구분된다.
 
 | OTel 이름 | Prometheus 변환 | 타입 | 설명 |
 |-----------|----------------|------|------|
@@ -49,33 +51,36 @@ duration_view = View(
 
 ## Grafana 대시보드
 
+대시보드 상단에 `mode`(sync/async) 드롭다운이 있으며, 모든 쿼리에 `key=~"/${mode}/.*"` 필터가 적용된다.
+
 ### 패널 구성
 
 #### 1. Requests / sec (allowed vs denied)
 
 ```promql
-rate(throttled_requests_total{result="allowed"}[1m])
-rate(throttled_requests_total{result="denied"}[1m])
+rate(throttled_requests_total{result="allowed", algorithm="$algorithm", key=~"/${mode}/.*"}[1m])
+rate(throttled_requests_total{result="denied", algorithm="$algorithm", key=~"/${mode}/.*"}[1m])
 ```
 
 #### 2. Denied ratio
 
 ```promql
-sum(throttled_requests_total{result="denied"}) / clamp_min(sum(throttled_requests_total), 1)
+sum(throttled_requests_total{result="denied", algorithm="$algorithm", key=~"/${mode}/.*"})
+  / clamp_min(sum(throttled_requests_total{algorithm="$algorithm", key=~"/${mode}/.*"}), 1)
 ```
 
 #### 3. Total requests
 
 ```promql
-throttled_requests_total
+throttled_requests_total{algorithm="$algorithm", key=~"/${mode}/.*"}
 ```
 
 #### 4. Rate limit check latency (p50 / p95 / p99)
 
 ```promql
-histogram_quantile(0.50, sum by (le) (rate(throttled_duration_seconds_bucket[1m])))
-histogram_quantile(0.95, sum by (le) (rate(throttled_duration_seconds_bucket[1m])))
-histogram_quantile(0.99, sum by (le) (rate(throttled_duration_seconds_bucket[1m])))
+histogram_quantile(0.50, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm="$algorithm", key=~"/${mode}/.*"}[1m])))
+histogram_quantile(0.95, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm="$algorithm", key=~"/${mode}/.*"}[1m])))
+histogram_quantile(0.99, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm="$algorithm", key=~"/${mode}/.*"}[1m])))
 ```
 
 `sum by (le)`는 `result` label(allowed/denied)을 합산하여 단일 시리즈로 만듦.

@@ -5,28 +5,31 @@ rate limit: **500 req/min** (`per_min(500)`, ~8.3 req/s)
 ## Prerequisites
 
 ```bash
-# 1. 인프라
+# 전체 스택 기동
 make up
 
-# 2. 앱 기동 (예: token bucket)
-make app-token-bucket
-
-# 3. Grafana
+# Grafana
 open http://localhost:3000
-# Dashboards → Throttled Rate Limit
+# Dashboards → Throttled Rate Limit → 상단 mode 드롭다운에서 sync/async 전환
 ```
 
 ## Scenario (5 min)
 
 ```bash
-# 개별 실행
-make scenario-token-bucket
-
-# 또는 원커맨드 (앱 기동 + 시나리오 + 종료)
+# 개별 실행 (sync)
 make run-token-bucket
 
-# 전체 알고리즘 병렬
-make run-all
+# 개별 실행 (async)
+make run-token-bucket MODE=async
+
+# 전체 알고리즘 병렬 (sync)
+make run-all-sync
+
+# 전체 알고리즘 병렬 (async)
+make run-all-async
+
+# 시나리오 스크립트 직접 실행
+bash scenario.sh token_bucket async
 ```
 
 | Phase | Time | Rate | Expected |

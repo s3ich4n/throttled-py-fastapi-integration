@@ -1,32 +1,35 @@
 # fastapi-throttled-py-integration
 
-[throttled-py](https://github.com/ZhuoZhuoCrayon/throttled-py) 라이브러리의 5가지 rate limiting 알고리즘을 FastAPI + OTel + Grafana로 시각화하는 프로젝트.
+[throttled-py](https://github.com/ZhuoZhuoCrayon/throttled-py) 라이브러리의 5가지 rate limiting 알고리즘을 FastAPI + OTel + Grafana로 시각화하는 프로젝트. 동기(sync)와 비동기(async) 두 가지 모드를 지원한다.
 
 ## 구성
 
 ```
-┌──────────┐    OTLP/gRPC    ┌───────────────┐   remote write   ┌────────────┐
-│  FastAPI  │ ──────────────→ │ OTel Collector │ ──────────────→ │ Prometheus │
-│  (app)    │   :4317         └───────────────┘                  └─────┬──────┘
-└──────────┘                                                          │
-                                                                      │ query
-                                                                ┌─────▼──────┐
-                                                                │  Grafana   │
-                                                                │  :3000     │
-                                                                └────────────┘
+┌─────────────────────────┐
+│  FastAPI (app.py)       │
+│  /sync/{algorithm}/pay  │    OTLP/gRPC    ┌───────────────┐   remote write   ┌────────────┐
+│  /async/{algorithm}/pay │ ──────────────→ │ OTel Collector │ ──────────────→ │ Prometheus │
+│  :8000 (Docker)         │   :4317         └───────────────┘                  └─────┬──────┘
+└─────────────────────────┘                                                          │
+                                                                                     │ query
+                                                                               ┌─────▼──────┐
+                                                                               │  Grafana   │
+                                                                               │  :3000     │
+                                                                               └────────────┘
 ```
 
-### 알고리즘별 앱
+### 앱 구조
 
-| 알고리즘 | 파일 | 포트 |
-|---------|------|------|
-| Token Bucket | `metric_check_token_bucket.py` | 8000 |
-| Fixed Window | `metric_check_fixed_window.py` | 8001 |
-| Sliding Window | `metric_check_sliding_window.py` | 8002 |
-| Leaking Bucket | `metric_check_leaking_bucket.py` | 8003 |
-| GCRA | `metric_check_gcra.py` | 8004 |
+단일 FastAPI 앱(`app.py`)이 5개 알고리즘 × 2가지 모드 = 10개 엔드포인트를 제공한다.
 
-모든 앱은 동일한 설정(`per_min(500)`, in-memory store)으로 동작하며, `using` 파라미터만 다르다.
+| 엔드포인트 | 설명 |
+|-----------|------|
+| `POST /sync/{algorithm}/pay` | 동기 rate limit 체크 (`Throttled` + `OTelHook`) |
+| `POST /async/{algorithm}/pay` | 비동기 rate limit 체크 (`AsyncThrottled` + `AsyncOTelHook`) |
+
+`{algorithm}`: `token_bucket`, `fixed_window`, `sliding_window`, `leaking_bucket`, `gcra`
+
+모든 엔드포인트는 동일한 설정(`per_min(500)`, in-memory store)으로 동작하며, `using` 파라미터만 다르다.
 
 ### 수집 메트릭
 
@@ -35,39 +38,32 @@
 | `throttled_requests_total` | Counter | `result`, `algorithm`, `key`, `store_type` | rate limit 체크 횟수 |
 | `throttled_duration_seconds_*` | Histogram | (동일) | rate limit 체크 소요 시간 |
 
-Grafana 대시보드는 `algorithm` 레이블로 row를 반복하여, 알고리즘별 섹션을 자동 생성한다.
+Grafana 대시보드는 `mode`(sync/async) 드롭다운과 `algorithm` 레이블로 row를 반복하여, 모드별·알고리즘별 섹션을 자동 생성한다.
 
 ## 테스트 방법
 
 ### 사전 준비
 
 ```bash
-# Python 의존성 설치
-uv sync
-
-# 인프라 기동 (OTel Collector, Prometheus, Grafana)
+# 전체 스택 기동 (앱 + OTel Collector + Prometheus + Grafana)
 make up
+
+# 또는 빌드부터
+make build && make up
 ```
 
 ### 단일 알고리즘 테스트
 
 ```bash
-# 1. 앱 기동 (별도 터미널)
-make app-token-bucket
-
-# 2. 시나리오 실행 (별도 터미널)
-make scenario-token-bucket
-
-# 3. Grafana 확인
-#    http://localhost:3000 → Dashboards → Throttled Rate Limit
-```
-
-### 단일 알고리즘 원커맨드
-
-앱 기동 → 시나리오 실행 → 앱 종료를 한 번에:
-
-```bash
+# sync 모드 (기본)
 make run-token-bucket
+
+# async 모드
+make run-token-bucket MODE=async
+
+# Grafana 확인
+#   http://localhost:3000 → Dashboards → Throttled Rate Limit
+#   상단 mode 드롭다운에서 sync/async 전환
 ```
 
 ### 전체 알고리즘 병렬 실행
@@ -75,10 +71,17 @@ make run-token-bucket
 5개 알고리즘을 동시에 실행하고 비교:
 
 ```bash
+# sync 모드 전체
+make run-all-sync
+
+# async 모드 전체
+make run-all-async
+
+# 기본 모드(sync) 전체
 make run-all
 ```
 
-5개 앱이 각각 다른 포트(8000~8004)에서 병렬로 기동되고, 동일한 시나리오가 동시에 실행된다. 메트릭은 모두 같은 OTel Collector로 전송되어 Grafana에서 알고리즘별 섹션으로 분리된다.
+단일 FastAPI 앱(포트 8000)에서 5개 알고리즘 시나리오가 동시에 실행된다. 메트릭은 `key` 레이블(`/sync/...` 또는 `/async/...`)로 구분되어 Grafana에서 모드별로 필터링된다.
 
 ### 시나리오 (5분)
 
@@ -95,19 +98,29 @@ make run-all
 make down
 ```
 
+### 시나리오 스크립트 직접 실행
+
+```bash
+# bash scenario.sh <algorithm> [sync|async]
+bash scenario.sh token_bucket async
+```
+
 ## Makefile 타겟 요약
 
 | 타겟 | 설명 |
 |------|------|
-| `make up` | 인프라 기동 (docker compose) |
-| `make down` | 인프라 종료 |
-| `make app-{알고리즘}` | 앱만 포그라운드로 기동 |
-| `make scenario-{알고리즘}` | 시나리오만 실행 |
-| `make run-{알고리즘}` | 앱 기동 + 시나리오 + 종료 (원커맨드) |
-| `make run-all` | 전체 알고리즘 병렬 실행 |
-| `make logs-{서비스}` | 서비스 로그 확인 |
+| `make build` | Docker 이미지 빌드 |
+| `make up` | 전체 스택 기동 (docker compose) |
+| `make down` | 전체 스택 종료 |
+| `make run-{알고리즘}` | 기동 + 시나리오 실행 (`MODE=async` 지원) |
+| `make run-all` | 전체 알고리즘 병렬 실행 (기본 sync) |
+| `make run-all-sync` | 전체 알고리즘 병렬 실행 (sync) |
+| `make run-all-async` | 전체 알고리즘 병렬 실행 (async) |
+| `make scenario-{알고리즘}` | 시나리오만 실행 (앱이 떠있어야 함) |
+| `make logs` | 앱 로그 확인 |
+| `make logs-{서비스}` | 인프라 서비스 로그 확인 |
 
-`{알고리즘}`: `token-bucket`, `fixed-window`, `sliding-window`, `leaking-bucket`, `gcra`
+`{알고리즘}`: `token_bucket`, `fixed_window`, `sliding_window`, `leaking_bucket`, `gcra`
 
 ## 문서
 
