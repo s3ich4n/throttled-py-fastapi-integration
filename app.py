@@ -79,10 +79,10 @@ def sync_pay(algorithm: Algorithm = Path(...)):
     if result.limited:
         return JSONResponse(
             status_code=429,
-            content={"detail": "요청이 너무 많습니다. 잠시 후 다시 시도해주세요."},
+            content={"detail": "Too many requests. Please try again later."},
             headers={"Retry-After": str(result.state.retry_after)},
         )
-    return {"message": "결제완료"}
+    return {"message": "Payment success"}
 
 
 @app.post("/async/{algorithm}/pay")
@@ -91,7 +91,7 @@ async def async_pay(algorithm: Algorithm = Path(...)):
     if result.limited:
         return JSONResponse(
             status_code=429,
-            content={"detail": "요청이 너무 많습니다. 잠시 후 다시 시도해주세요."},
+            content={"detail": "Too many requests. Please try again later."},
             headers={"Retry-After": str(result.state.retry_after)},
         )
-    return {"message": "결제완료"}
+    return {"message": "Payment success"}
