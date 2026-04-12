@@ -1,10 +1,10 @@
-# Fixed Window 알고리즘과 메트릭 해석
+# Fixed Window Algorithm and Metric Interpretation
 
-## Fixed Window 작동 원리
+## How Fixed Window Works
 
-### 핵심 개념
+### Core Concept
 
-시간을 고정 크기 윈도우로 나누고, 각 윈도우 안에서 요청 수를 센다. 한도를 넘으면 거부. 윈도우가 바뀌면 카운터가 리셋된다.
+Time is divided into fixed-size windows, and requests are counted within each window. If the limit is exceeded, requests are denied. When the window changes, the counter resets.
 
 ```
         window 0           window 1           window 2
@@ -14,27 +14,27 @@
    └──────────────────┴──────────────────┴──────────────────┘
    │←── period(60s) ──→│←── period(60s) ──→│
 
-   윈도우 번호 = now // period
-   윈도우 전환 시 카운터 자동 리셋 (새 키 생성)
+   window number = now // period
+   Counter automatically resets on window transition (new key created)
 ```
 
-### 판정 로직
+### Decision Logic
 
 ```
-요청 도착
+Request arrives
   │
   ▼
-① 윈도우 키 계산
+① Calculate window key
   │  window_idx = now // period
   │  key = "{key}:period:{window_idx}"
   │
   ▼
-② 카운터 증가 (atomic)
+② Increment counter (atomic)
   │  counter = INCRBY(key, cost)
-  │  if counter == cost → 첫 요청, TTL = period 설정
+  │  if counter == cost → first request, set TTL = period
   │
   ▼
-③ 한도 확인
+③ Check limit
   │  counter > limit ?
   │
   ├── YES → limited = true  (denied)
@@ -44,39 +44,39 @@
             remaining = limit - counter
 ```
 
-### 파라미터
+### Parameters
 
-`per_min(500)` 설정 시:
+When configured with `per_min(500)`:
 
-| 파라미터 | 값 | 의미 |
-|----------|-----|------|
-| limit | 500 | 윈도우당 최대 요청 수 |
-| period | 60 sec | 윈도우 크기 |
-| cost | 1 (기본값) | 요청 1회당 소모량 |
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| limit | 500 | Maximum requests per window |
+| period | 60 sec | Window size |
+| cost | 1 (default) | Consumption per request |
 
-### 상태 (State)
+### State
 
-| 저장 필드 | 설명 |
-|-----------|------|
-| `counter` | 현재 윈도우의 누적 요청 수 (단일 정수) |
+| Stored Field | Description |
+|--------------|-------------|
+| `counter` | Cumulative request count in the current window (single integer) |
 
-| 파생 필드 | 계산 | 설명 |
-|-----------|------|------|
-| `remaining` | = max(0, limit - counter) | 현재 윈도우에서 남은 요청 수 |
-| `reset_after` | = period - (now % period) | 다음 윈도우까지 남은 시간 |
-| `retry_after` | = reset_after (denied 시) | 다음 윈도우까지 대기 |
+| Derived Field | Calculation | Description |
+|---------------|-------------|-------------|
+| `remaining` | = max(0, limit - counter) | Remaining requests in the current window |
+| `reset_after` | = period - (now % period) | Time remaining until the next window |
+| `retry_after` | = reset_after (when denied) | Wait time until the next window |
 
-저장되는 상태가 **정수 하나**뿐이므로 모든 알고리즘 중 가장 단순하다.
+Since the stored state is only **a single integer**, this is the simplest of all algorithms.
 
-## 시간에 따른 카운터 변화
+## Counter Changes Over Time
 
-`per_min(500)` 기준, 시나리오별 카운터 흐름:
+Counter flow by scenario, based on `per_min(500)`:
 
 ```
 counter
 500 ┤            ┃           ■■■■■■━━━━━━━━━━━━
-    │            ┃          ■       ↑ limit 도달
-    │            ┃         ■        이후 전부 denied
+    │            ┃          ■       ↑ limit reached
+    │            ┃         ■        all denied after this
     │            ┃        ■
     │        ■■■■■■■■■■■■■
     │       ■    ┃
@@ -85,72 +85,74 @@ counter
   0 ┤━━━━━━━━━━━━╋━━━━━━━━━━━━━━━━━━━╋━━━━━━━━━
     │  Phase 1   ┃    Phase 2,3      ┃ Phase 4
     │            ┃                   ┃
-    │       윈도우 리셋           윈도우 리셋
+    │       window reset         window reset
     ├──────────────────────────────────────── time
     0:00    1:00    2:00    3:00    4:00    5:00
 ```
 
-### 윈도우 경계 문제: 2배 burst
+### Window Boundary Problem: 2x Burst
 
-Fixed Window의 대표적 약점. 윈도우 경계에서 순간적으로 limit의 2배까지 허용될 수 있다.
+A well-known weakness of Fixed Window. Up to 2x the limit can be allowed instantaneously at window boundaries.
 
 ```
-       window A (마지막 1초)      window B (첫 1초)
+       window A (last 1 second)      window B (first 1 second)
   ─────────────────────┃─────────────────────
            ...490 req  ┃  500 req...
                        ┃
-              이 2초 동안 990 req 허용
-              (limit=500인데 거의 2배)
+              990 req allowed in this 2-second span
+              (nearly 2x despite limit=500)
 ```
 
-윈도우 A 후반에 490개, 윈도우 B 초반에 500개가 몰리면, 2초 동안 990개가 통과한다. 분당 500개 제한이지만 순간적으로 초당 495개를 허용하는 셈.
+If 490 requests arrive at the end of window A and 500 at the beginning of window B, 990 requests pass through in 2 seconds. Although the limit is 500 per minute, this effectively allows ~495 requests per second momentarily.
 
-### Phase 3 (Burst) 상세: 왜 완전 차단이 발생하는가
+### Phase 3 (Burst) Detail: Why Complete Blocking Occurs
 
-20 req/s 트래픽에서 (윈도우 시작 기준):
+At 20 req/s traffic (from window start):
 
 ```
-시간   counter  판정     설명
+Time   counter  Decision   Description
 ────────────────────────────────────────────
-0.00      1    allowed  카운터 시작
+0.00      1    allowed    counter starts
 0.05      2    allowed
 ...
-24.95   500    allowed  limit 도달
-25.00   501    denied   초과 → 이후 전부 차단
+24.95   500    allowed    limit reached
+25.00   501    denied     exceeded → all blocked after this
 25.05   502    denied
 ...
-59.95  1200    denied   윈도우 끝까지 연속 denied
-60.00     1    allowed  새 윈도우 → 카운터 리셋
+59.95  1200    denied     continuous denied until window ends
+60.00     1    allowed    new window → counter reset
 ```
 
-25초 만에 limit(500)을 소진하면, 남은 35초는 **전부 denied**. Token bucket의 교차 패턴과 달리 **완전 차단 구간**이 생긴다.
+If the limit (500) is exhausted in 25 seconds, the remaining 35 seconds are **all denied**. Unlike the partial-throughput pattern of token bucket, a **complete blocking interval** occurs.
 
-## 메트릭과의 관계
+## Relationship with Metrics
 
 ### `throttled_requests_total` (Counter)
 
 ```
-                    완전 차단 구간
+                    Complete blocking interval
                     ↓↓↓↓↓↓↓↓↓↓
 allowed ████████████████████         ███████████████
 denied                      █████████
         ──────────────────────────────────────── time
         Phase 1,2     Phase 3            Phase 4
-        카운터 여유    limit 소진→차단     새 윈도우
+        counter has    limit exhausted    new window
+        headroom       → blocked
+
 ```
 
-| 구간 | counter 상태 | allowed rate | denied rate |
-|------|-------------|-------------|-------------|
-| Normal (3 req/s) | ~180 (여유) | 3/s | 0/s |
-| Ramp up (8 req/s) | 점진 증가 | 8/s | 0/s |
-| Burst (20 req/s) | 빠르게 500 도달 | 초반만 20/s → 0/s | 0/s → 20/s |
-| Cool down (3 req/s) | 리셋 후 ~180 | 3/s | 0/s |
+| Phase | Counter State | allowed rate | denied rate |
+|-------|--------------|-------------|-------------|
+| Normal (3 req/s) | ~180 (headroom) | 3/s | 0/s |
+| Ramp up (8 req/s) | gradually increasing | 8/s | 0/s |
+| Burst (20 req/s) | rapidly reaches 500 | early 20/s → 0/s | 0/s → 20/s |
+| Cool down (3 req/s) | ~180 after reset | 3/s | 0/s |
 
-Token bucket과의 핵심 차이: burst 구간에서 **allowed→denied 전환이 한 번** 일어나고, 이후 윈도우 리셋까지 연속 차단.
+Key difference from token bucket: in the burst phase, the **allowed→denied transition happens once**, followed by continuous blocking until the window resets.
 
 ### `throttled_duration_seconds` (Histogram)
 
-연산이 INCRBY + 비교 한 번이므로 token bucket보다 더 단순하다.
+The operation is just INCRBY + one comparison, making it simpler than token bucket.
 
 ```
 latency
@@ -166,25 +168,25 @@ latency
       ├──────────────────────────────────── time
 ```
 
-O(1) 연산. 카운터 증가와 정수 비교만 수행하므로 모든 알고리즘 중 가장 빠를 수 있다.
+O(1) operation. Since it only performs a counter increment and an integer comparison, it can be the fastest among all algorithms.
 
 ### Denied ratio (Gauge)
 
-| 구간 | 순간 차단률 | 계산 |
-|------|------------|------|
-| Normal / Ramp up | 0% | 카운터 여유 |
-| Burst 초반 | 0% | 아직 limit 미달 |
-| Burst 후반 | 100% | limit 소진 → 전량 차단 |
-| Cool down | 0% | 새 윈도우 리셋 |
+| Phase | Instantaneous Block Rate | Calculation |
+|-------|--------------------------|-------------|
+| Normal / Ramp up | 0% | counter has headroom |
+| Burst early | 0% | still below limit |
+| Burst late | 100% | limit exhausted → all blocked |
+| Cool down | 0% | new window reset |
 
-Token bucket의 ~58%와 달리, burst 후반은 **100% 차단**. 그래프에서 차단률이 0%↔100% 사이를 급격히 오가는 계단 패턴이 나타난다.
+Unlike token bucket's saturated steady-state denial ratio of roughly ~58%, the burst late phase has **100% blocking**. The graph shows a step pattern where the block rate sharply alternates between 0% and 100%.
 
-## 다른 알고리즘과의 차이
+## Differences from Other Algorithms
 
-| 특성 | Fixed Window | Token Bucket | Sliding Window |
-|------|-------------|--------------|----------------|
-| 구현 복잡도 | 가장 단순 (카운터 1개) | 보통 (2개 필드) | 높음 (2개 윈도우) |
-| Burst 패턴 | 윈도우 초반 집중 허용 → 후반 완전 차단 | 교차 (graceful degradation) | 균일 차단 |
-| 윈도우 경계 | 2배 burst 취약점 | 해당 없음 | 가중 평균으로 해결 |
-| 정확도 | 경계에서 부정확 | 장기 평균 정확 | 가장 정확 |
-| 적합 용도 | 단순 API quota, 정밀도 불필요한 경우 | 범용, burst 허용 필요 시 | 정밀한 rate limit 필요 시 |
+| Characteristic | Fixed Window | Token Bucket | Sliding Window |
+|----------------|-------------|--------------|----------------|
+| Implementation complexity | Simplest (1 counter) | Moderate (2 fields) | High (2 windows) |
+| Burst pattern | Concentrated allowance early in window → complete blocking late | Batched graceful degradation | Gradual throttling |
+| Window boundary | Vulnerable to 2x burst | Not applicable | Resolved via weighted average |
+| Accuracy | Inaccurate at boundaries | Accurate long-term average | Most accurate |
+| Suitable use cases | Simple API quotas, when precision is not required | General purpose, when burst tolerance is needed | When precise rate limiting is required |

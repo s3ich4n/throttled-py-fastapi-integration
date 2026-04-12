@@ -1,8 +1,8 @@
 # fastapi-throttled-py-integration
 
-[throttled-py](https://github.com/ZhuoZhuoCrayon/throttled-py) 라이브러리의 5가지 rate limiting 알고리즘을 FastAPI + OTel + Grafana로 시각화하는 프로젝트. 동기(sync)와 비동기(async) 두 가지 모드를 지원한다.
+A project that visualizes the 5 rate limiting algorithms of the [throttled-py](https://github.com/ZhuoZhuoCrayon/throttled-py) library using FastAPI + OTel + Grafana. Supports both synchronous (sync) and asynchronous (async) modes.
 
-## 구성
+## Architecture
 
 ```
 ┌─────────────────────────┐
@@ -18,133 +18,133 @@
                                                                                └────────────┘
 ```
 
-### 앱 구조
+### App Structure
 
-단일 FastAPI 앱(`app.py`)이 5개 알고리즘 × 2가지 모드 = 10개 엔드포인트를 제공한다.
+A single FastAPI app (`app.py`) serves 5 algorithms × 2 modes = 10 endpoints.
 
-| 엔드포인트 | 설명 |
-|-----------|------|
-| `POST /sync/{algorithm}/pay` | 동기 rate limit 체크 (`Throttled` + `OTelHook`) |
-| `POST /async/{algorithm}/pay` | 비동기 rate limit 체크 (`AsyncThrottled` + `AsyncOTelHook`) |
+| Endpoint | Description |
+|----------|-------------|
+| `POST /sync/{algorithm}/pay` | Sync rate limit check (`Throttled` + `OTelHook`) |
+| `POST /async/{algorithm}/pay` | Async rate limit check (`AsyncThrottled` + `AsyncOTelHook`) |
 
 `{algorithm}`: `token_bucket`, `fixed_window`, `sliding_window`, `leaking_bucket`, `gcra`
 
-모든 엔드포인트는 동일한 설정(`per_min(500)`, in-memory store)으로 동작하며, `using` 파라미터만 다르다.
+All endpoints use the same configuration (`per_min(500)`, in-memory store) and only differ in the `using` parameter.
 
-### 수집 메트릭
+### Collected Metrics
 
-| Prometheus 이름 | 타입 | 레이블 | 설명 |
-|----------------|------|--------|------|
-| `throttled_requests_total` | Counter | `result`, `algorithm`, `key`, `store_type` | rate limit 체크 횟수 |
-| `throttled_duration_seconds_*` | Histogram | (동일) | rate limit 체크 소요 시간 |
+| Prometheus Name | Type | Labels | Description |
+|-----------------|------|--------|-------------|
+| `throttled_requests_total` | Counter | `result`, `algorithm`, `key`, `store_type` | Number of rate limit checks |
+| `throttled_duration_seconds_*` | Histogram | (same) | Duration of rate limit checks |
 
-Grafana 대시보드는 `mode`(sync/async) 드롭다운과 `algorithm` 레이블로 row를 반복하여, 모드별·알고리즘별 섹션을 자동 생성한다.
+The Grafana dashboard uses a `mode` (sync/async) dropdown and repeats rows by `algorithm` label, automatically generating per-mode and per-algorithm sections.
 
-## 테스트 방법
+## How to Test
 
-### 사전 준비
+### Prerequisites
 
 ```bash
-# 전체 스택 기동 (앱 + OTel Collector + Prometheus + Grafana)
+# Start the full stack (app + OTel Collector + Prometheus + Grafana)
 make up
 
-# 또는 빌드부터
+# Or build first
 make build && make up
 ```
 
-### 단일 알고리즘 테스트
+### Single Algorithm Test
 
 ```bash
-# sync 모드 (기본)
+# sync mode (default)
 make run-token-bucket
 
-# async 모드
+# async mode
 make run-token-bucket MODE=async
 
-# Grafana 확인
+# Check Grafana
 #   http://localhost:3000 → Dashboards → Throttled Rate Limit
-#   상단 mode 드롭다운에서 sync/async 전환
+#   Switch sync/async using the mode dropdown at the top
 ```
 
-### 전체 알고리즘 병렬 실행
+### Run All Algorithms in Parallel
 
-5개 알고리즘을 동시에 실행하고 비교:
+Run all 5 algorithms simultaneously for comparison:
 
 ```bash
-# sync 모드 전체
+# All in sync mode
 make run-all-sync
 
-# async 모드 전체
+# All in async mode
 make run-all-async
 
-# 기본 모드(sync) 전체
+# All in default mode (sync)
 make run-all
 ```
 
-단일 FastAPI 앱(포트 8000)에서 5개 알고리즘 시나리오가 동시에 실행된다. 메트릭은 `key` 레이블(`/sync/...` 또는 `/async/...`)로 구분되어 Grafana에서 모드별로 필터링된다.
+All 5 algorithm scenarios run concurrently on a single FastAPI app (port 8000). Metrics are distinguished by the `key` label (`/sync/...` or `/async/...`) and filtered by mode in Grafana.
 
-### 시나리오 (5분)
+### Scenario (5 minutes)
 
-| Phase | 시간 | 트래픽 | 예상 결과 |
-|-------|------|--------|----------|
-| 1. Normal | 0:00 - 1:00 | 3 req/s (180/min) | 전량 allowed |
-| 2. Ramp up | 1:00 - 2:30 | 8 req/s (480/min) | allowed (한계선) |
-| 3. Burst | 2:30 - 4:00 | 20 req/s (1200/min) | allowed/denied 교차 |
-| 4. Cool down | 4:00 - 5:00 | 3 req/s (180/min) | 즉시 회복 |
+| Phase | Time | Traffic | Expected Result |
+|-------|------|---------|-----------------|
+| 1. Normal | 0:00 - 1:00 | 3 req/s (180/min) | All allowed |
+| 2. Ramp up | 1:00 - 2:30 | 8 req/s (480/min) | Allowed (near limit) |
+| 3. Burst | 2:30 - 4:00 | 20 req/s (1200/min) | Allowed/denied interleaved |
+| 4. Cool down | 4:00 - 5:00 | 3 req/s (180/min) | Immediate recovery |
 
-### 정리
+### Cleanup
 
 ```bash
 make down
 ```
 
-### 시나리오 스크립트 직접 실행
+### Running the Scenario Script Directly
 
 ```bash
 # bash scenario.sh <algorithm> [sync|async]
 bash scenario.sh token_bucket async
 ```
 
-## Makefile 타겟 요약
+## Makefile Targets
 
-| 타겟 | 설명 |
-|------|------|
-| `make build` | Docker 이미지 빌드 |
-| `make up` | 전체 스택 기동 (docker compose) |
-| `make down` | 전체 스택 종료 |
-| `make run-{알고리즘}` | 기동 + 시나리오 실행 (`MODE=async` 지원) |
-| `make run-all` | 전체 알고리즘 병렬 실행 (기본 sync) |
-| `make run-all-sync` | 전체 알고리즘 병렬 실행 (sync) |
-| `make run-all-async` | 전체 알고리즘 병렬 실행 (async) |
-| `make scenario-{알고리즘}` | 시나리오만 실행 (앱이 떠있어야 함) |
-| `make logs` | 앱 로그 확인 |
-| `make logs-{서비스}` | 인프라 서비스 로그 확인 |
+| Target | Description |
+|--------|-------------|
+| `make build` | Build Docker image |
+| `make up` | Start the full stack (docker compose, nohup with timestamped log) |
+| `make down` | Stop the full stack |
+| `make run-{algorithm}` | Start + run scenario (`MODE=async` supported) |
+| `make run-all` | Run all algorithms in parallel (default: sync) |
+| `make run-all-sync` | Run all algorithms in parallel (sync) |
+| `make run-all-async` | Run all algorithms in parallel (async) |
+| `make scenario-{algorithm}` | Run scenario only (app must be running) |
+| `make logs` | View app logs |
+| `make logs-{service}` | View infrastructure service logs |
 
-`{알고리즘}`: `token_bucket`, `fixed_window`, `sliding_window`, `leaking_bucket`, `gcra`
+`{algorithm}`: `token_bucket`, `fixed_window`, `sliding_window`, `leaking_bucket`, `gcra`
 
-## 문서
+## Documentation
 
-### 메트릭 및 대시보드
+### Metrics & Dashboard
 
-- [OTel Metric 검증](docs/metric.md) — 메트릭 구성, Grafana 패널, histogram bucket 보정
-- [테스트 시나리오](docs/scenario.md) — 시나리오 구성 및 관찰 포인트
+- [OTel Metric Verification](docs/metric.md) — Metric structure, Grafana panels, histogram bucket calibration
+- [Test Scenario](docs/scenario.md) — Scenario configuration and observation points
 
-### 알고리즘별 작동 원리
+### Algorithm Internals
 
-각 문서는 알고리즘의 작동 원리, 시나리오별 동작, 메트릭과의 관계를 설명한다.
+Each document explains how the algorithm works, its behavior under each scenario phase, and its relationship to the collected metrics.
 
-- [Token Bucket](docs/metric_explanation_token_bucket.md) — 토큰 보충/차감 모델, graceful degradation 교차 패턴
-- [Fixed Window](docs/metric_explanation_fixed_window.md) — 카운터 기반, 윈도우 경계 2배 burst 취약점
-- [Sliding Window](docs/metric_explanation_sliding_window.md) — 이전/현재 윈도우 가중 평균, 가장 정확한 제한
-- [Leaking Bucket](docs/metric_explanation_leaking_bucket.md) — Token Bucket의 역전 모델, 동일한 메트릭 결과
-- [GCRA](docs/metric_explanation_gcra.md) — TAT 하나로 추적, 최소 상태, 가장 균일한 허용 패턴
+- [Token Bucket](docs/metric_explanation_token_bucket.md) — Token replenishment/deduction model, graceful degradation interleave pattern
+- [Fixed Window](docs/metric_explanation_fixed_window.md) — Counter-based, vulnerable to 2x burst at window boundaries
+- [Sliding Window](docs/metric_explanation_sliding_window.md) — Weighted average of previous/current windows, most accurate limiting
+- [Leaking Bucket](docs/metric_explanation_leaking_bucket.md) — Inverted Token Bucket model, identical metric results
+- [GCRA](docs/metric_explanation_gcra.md) — Tracks a single TAT, minimal state, most uniform allow pattern
 
-### 알고리즘 비교
+### Algorithm Comparison
 
-| 특성 | Token Bucket | Fixed Window | Sliding Window | Leaking Bucket | GCRA |
-|------|-------------|--------------|----------------|---------------|------|
-| 상태 크기 | 2개 필드 | 카운터 1개 | 카운터 2개 | 2개 필드 | 타임스탬프 1개 |
-| Burst 패턴 | 교차 | 완전 차단 | 점진적 차단 | 교차 | 균일 교차 |
-| 윈도우 경계 문제 | 없음 | 2배 burst | 없음 | 없음 | 없음 |
-| 허용 균일성 | 보통 | 낮음 | 보통 | 보통 | 가장 균일 |
-| 구현 복잡도 | 보통 | 가장 단순 | 높음 | 보통 | 보통 |
+| Property | Token Bucket | Fixed Window | Sliding Window | Leaking Bucket | GCRA |
+|----------|-------------|--------------|----------------|---------------|------|
+| State Size | 2 fields | 1 counter | 2 counters | 2 fields | 1 timestamp |
+| Burst Pattern | Interleaved | Full block | Gradual block | Interleaved | Uniform interleave |
+| Window Boundary Issue | None | 2x burst | None | None | None |
+| Allow Uniformity | Medium | Low | Medium | Medium | Most uniform |
+| Implementation Complexity | Medium | Simplest | High | Medium | Medium |

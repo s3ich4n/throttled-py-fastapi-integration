@@ -1,10 +1,10 @@
-# GCRA 알고리즘과 메트릭 해석
+# GCRA Algorithm and Metric Interpretation
 
-## GCRA 작동 원리
+## How GCRA Works
 
-### 핵심 개념
+### Core Concept
 
-GCRA(Generic Cell Rate Algorithm)는 **다음 요청이 허용되는 이론적 시각(TAT)** 하나만 추적한다. 요청이 TAT보다 충분히 이후에 도착하면 허용, 아니면 거부.
+GCRA (Generic Cell Rate Algorithm) tracks only **the theoretical arrival time (TAT)** of conforming traffic. A request is allowed when the current time is not earlier than `allow_at`, where `allow_at` is derived from TAT and the allowed burst capacity.
 
 ```
          TAT (Theoretical Arrival Time)
@@ -22,188 +22,188 @@ GCRA(Generic Cell Rate Algorithm)는 **다음 요청이 허용되는 이론적 �
    allow_at = TAT - (capacity × emission_interval)
 ```
 
-### 다른 알고리즘과의 근본적 차이
+### Fundamental Differences from Other Algorithms
 
-| 알고리즘 | 질문 | 추적 대상 |
+| Algorithm | Question | What It Tracks |
 |---------|------|----------|
-| Token Bucket | "토큰이 남았는가?" | 남은 토큰 수 + 마지막 보충 시각 |
-| Fixed Window | "이 윈도우에서 몇 개 썼는가?" | 카운터 |
-| Sliding Window | "가중 합산이 한도 이내인가?" | 카운터 2개 |
-| **GCRA** | **"이 요청이 너무 빨리 온 건 아닌가?"** | **TAT 하나** |
+| Token Bucket | "Are there tokens remaining?" | Remaining token count + last refill time |
+| Fixed Window | "How many have been used in this window?" | Counter |
+| Sliding Window | "Is the weighted sum within the limit?" | 2 counters |
+| **GCRA** | **"Did this request arrive too quickly?"** | **TAT only** |
 
-GCRA는 상태를 **타임스탬프 하나**로 압축한다. 가장 적은 상태로 정밀한 rate limiting을 구현한다.
+GCRA compresses state into **a single timestamp**. It achieves precise rate limiting with very little state.
 
-### 판정 로직
+### Decision Logic
 
 ```
-요청 도착
+Request arrives
   │
   ▼
-① TAT 조회
-  │  last_tat = GET(key) or now  (첫 요청이면 현재 시각)
+① Look up TAT
+  │  last_tat = GET(key) or now  (current time if first request)
   │
   ▼
-② 새 TAT 계산
+② Calculate new TAT
   │  tat = max(now, last_tat) + cost × emission_interval
   │
   ▼
-③ 허용 시각 계산
+③ Calculate allow time
   │  allow_at = tat - capacity × emission_interval
   │  time_elapsed = now - allow_at
   │  remaining = floor(time_elapsed / emission_interval)
   │
   ▼
-④ 판정
+④ Decision
   │  remaining ≥ 0 ?
   │
   ├── NO  → limited = true  (denied)
   │         retry_after = -time_elapsed
-  │         TAT 갱신 안 함
+  │         TAT is not updated
   │
   └── YES → limited = false (allowed)
-            TAT = tat 저장
+            Save TAT = tat
             reset_after = tat - now
 ```
 
-### 파라미터
+### Parameters
 
-`per_min(500)` 설정 시:
+For the `per_min(500)` configuration:
 
-| 파라미터 | 값 | 의미 |
+| Parameter | Value | Meaning |
 |----------|-----|------|
-| capacity | 500 | burst 허용량 |
-| emission_interval | 0.12 sec | 요청 1개당 필요 간격 (60 / 500) |
-| fill_time | 60 sec | 전체 capacity 충전 시간 (500 × 0.12) |
-| cost | 1 (기본값) | 요청 1회가 TAT를 밀어내는 양 |
+| capacity | 500 | Burst allowance |
+| emission_interval | 0.12 sec | Required interval per request (60 / 500) |
+| fill_time | 60 sec | Time to fully recharge capacity (500 × 0.12) |
+| cost | 1 (default) | Amount by which a single request advances the TAT |
 
-### 상태 (State)
+### State
 
-| 저장 필드 | 설명 |
+| Stored Field | Description |
 |-----------|------|
-| `TAT` | 다음 허용 이론 시각 (단일 타임스탬프) |
+| `TAT` | Theoretical arrival time of conforming traffic (a single monotonic timestamp for the in-memory store) |
 
-**이것이 전부다.** 모든 알고리즘 중 가장 적은 상태.
+**That is all.** This is one of the smallest state representations among the supported algorithms.
 
-| 파생 필드 | 계산 | 설명 |
+| Derived Field | Calculation | Description |
 |-----------|------|------|
-| `remaining` | = floor((now - allow_at) / emission_interval) | 남은 허용 가능 횟수 |
-| `reset_after` | = tat - now | TAT가 과거가 될 때까지 남은 시간 |
-| `retry_after` | = -(now - allow_at) (denied 시) | 허용 시각까지 대기 시간 |
+| `remaining` | = floor((now - allow_at) / emission_interval) | Number of remaining allowed requests |
+| `reset_after` | = tat - now | Time remaining until TAT falls into the past |
+| `retry_after` | = -(now - allow_at) (when denied) | Wait time until the allow time |
 
-## TAT의 직관적 이해
+## Intuitive Understanding of TAT
 
-TAT는 "빚"으로 생각할 수 있다. 요청을 허용할 때마다 미래에 빚을 쌓고, 시간이 지나면 빚이 줄어든다.
+TAT can be thought of as "debt." Each time a request is allowed, debt is accumulated into the future, and as time passes, the debt decreases.
 
 ```
 TAT
 future ┤
-       │  ■              요청마다 TAT가 미래로 밀림
-       │  ■■              (빚이 쌓임)
+       │  ■              TAT shifts into the future with each request
+       │  ■■              (debt accumulates)
        │    ■■
        │      ■■■
-       │         ■■■■■■■■■■ ← TAT가 capacity분 앞에 있으면
-       │                       더 이상 빚을 쌓을 수 없음 → denied
+       │         ■■■■■■■■■■ ← When TAT is capacity-worth ahead,
+       │                       no more debt can be added → denied
   now  ┤─────────────────────
        │
- past  ┤  TAT가 과거에 있으면
-       │  빚이 없는 상태 → 무조건 allowed
+ past  ┤  When TAT is in the past,
+       │  there is no debt → always allowed
        ├──────────────────────────────── time
 ```
 
-### 구체적 예시
+### Concrete Example
 
-capacity=5, emission_interval=1초 기준:
+With capacity=5, emission_interval=1 second:
 
 ```
-시각  TAT    allow_at  판정     설명
+Time  TAT    allow_at  Decision  Explanation
 ─────────────────────────────────────────────
-t=0   1      -4       allowed  TAT=max(0,0)+1=1, allow_at=1-5=-4
-t=0   2      -3       allowed  TAT=max(0,1)+1=2, allow_at=2-5=-3
-t=0   3      -2       allowed  TAT=max(0,2)+1=3
-t=0   4      -1       allowed  TAT=max(0,3)+1=4
-t=0   5       0       allowed  TAT=max(0,4)+1=5, allow_at=5-5=0, 0≥0 OK
-t=0   6       1       denied   TAT=max(0,5)+1=6, allow_at=6-5=1, 0<1 NG
-                                retry_after = 1초
+t=0   1      -4       allowed   TAT=max(0,0)+1=1, allow_at=1-5=-4
+t=0   2      -3       allowed   TAT=max(0,1)+1=2, allow_at=2-5=-3
+t=0   3      -2       allowed   TAT=max(0,2)+1=3
+t=0   4      -1       allowed   TAT=max(0,3)+1=4
+t=0   5       0       allowed   TAT=max(0,4)+1=5, allow_at=5-5=0, 0≥0 OK
+t=0   6       1       denied    TAT=max(0,5)+1=6, allow_at=6-5=1, 0<1 NG
+                                retry_after = 1 sec
 
-t=1   6       1       allowed  now=1 ≥ allow_at=1 → OK
-                                TAT=max(1,5)+1=6 (동일)
+t=1   6       1       allowed   now=1 ≥ allow_at=1 → OK
+                                TAT=max(1,5)+1=6
 
-t=2   6       1       allowed  TAT=max(2,5)+1=6, allow_at=1, 2≥1 OK
-                                하지만 remaining=floor((2-1)/1)=1 → 딱 1개만
+t=2   7       2       allowed   TAT=max(2,6)+1=7, allow_at=2, 2≥2 OK
+                                The limiter is still exactly at the sustained rate
 ```
 
-시간이 지나면 allow_at이 상대적으로 과거가 되어 자연스럽게 요청이 허용된다.
+As time passes, allow_at becomes relatively further in the past, naturally allowing requests again.
 
-## 시간에 따른 TAT 변화
+## TAT Changes Over Time
 
-`per_min(500)` 기준:
+Based on `per_min(500)`:
 
 ```
-TAT - now (초 단위 "빚")
+TAT - now (debt in seconds)
  60 ┤                    ■■■━━━━━━━━
     │                   ■    capacity × emission_interval
-    │                  ■     = 500 × 0.12 = 60초
-    │                ■■      이 이상 빚을 쌓을 수 없음
+    │                  ■     = 500 × 0.12 = 60 sec
+    │                ■■      No more debt can be accumulated beyond this
     │            ■■■■
     │  Phase 1  ■    Phase 2
     │  3 req/s ■     8 req/s
-    │  빚 < 보상 ■    빚 ≈ 보상
-    │  → TAT≈now ■   → TAT 점진 상승
+    │  debt < repay ■  debt ≈ repay
+    │  → TAT≈now ■   → TAT gradually rises
   0 ┤■■■■■■■■■■■                      ■■■■■■■■■
     │                          Phase 4
-    │                          빚 상환 → TAT≈now
+    │                          debt repaid → TAT≈now
     ├──────────────────────────────────────── time
     0:00    1:00    2:00    3:00    4:00    5:00
 ```
 
-### Phase 3 (Burst) 상세
+### Phase 3 (Burst) Details
 
-20 req/s 트래픽에서, TAT가 최대(60초 앞)에 도달한 후:
+At 20 req/s traffic, after TAT reaches maximum (60 seconds ahead). Values below are approximate illustrations of the steady-state pattern:
 
 ```
-시간   TAT-now  remaining  판정     설명
+Time    TAT-now  remaining  Decision  Explanation
 ────────────────────────────────────────────
-0.00    59.88      1      allowed  마지막 여유
-0.05    60.00      0      allowed  정확히 한계
-0.10    60.00     -1      denied   빚 한도 초과
-0.15    60.00     -1      denied
-0.20    59.88      0      allowed  0.12초 경과 → 빚 0.12 상환 → 1개 허용
-0.25    60.00     -1      denied
-0.30    59.88      0      allowed  다시 0.12초 경과 → 1개 허용
+0.00    ~59.88     1       allowed   Last available slot
+0.05    ~60.00     0       allowed   Exactly at the limit
+0.10    ~60.00    -1       denied    Debt limit exceeded
+0.15    ~60.00    -1       denied
+0.20    ~59.88     0       allowed   ~0.12 sec elapsed → debt repaid → 1 allowed
+0.25    ~60.00    -1       denied
+0.30    ~59.88     0       allowed   Another ~0.12 sec elapsed → 1 allowed
 ...
 ```
 
-emission_interval(0.12초)마다 정확히 1개씩 허용. **가장 균일한 교차 패턴**을 보인다.
+Approximately 1 request is allowed per emission_interval (0.12 sec). **This produces the most uniform alternating pattern.** Exact values depend on the monotonic clock resolution and actual request arrival timing.
 
-## 메트릭과의 관계
+## Relationship to Metrics
 
 ### `throttled_requests_total` (Counter)
 
 ```
-                    균일한 교차 패턴
+                    Uniform alternating pattern
                          ↓↓↓
 allowed ████████████████▓▓▓▓▓▓▓▓▓▓▓████████
 denied                  ▓▓▓▓▓▓▓▓▓▓▓
         ─────────────────────────────────── time
         Phase 1,2       Phase 3     Phase 4
-        TAT ≈ now       TAT 최대     TAT 하강
+        TAT ≈ now       TAT at max   TAT declining
 ```
 
-| 구간 | TAT 상태 | allowed rate | denied rate |
+| Phase | TAT State | allowed rate | denied rate |
 |------|---------|-------------|-------------|
 | Normal (3 req/s) | TAT ≈ now | 3/s | 0/s |
-| Ramp up (8 req/s) | TAT 점진 상승 | 8/s | 0/s |
-| Burst (20 req/s) | TAT 최대 (60초 앞) | ~8.33/s (= 1/emission_interval) | ~11.67/s |
-| Cool down (3 req/s) | TAT 하강 | 3/s | 0/s |
+| Ramp up (8 req/s) | TAT gradually rising | 8/s | 0/s |
+| Burst (20 req/s) | TAT at max (60 sec ahead) | ~8.33/s (= 1/emission_interval) | ~11.67/s |
+| Cool down (3 req/s) | TAT declining | 3/s | 0/s |
 
-Token bucket, Leaking bucket과 동일한 처리량이지만, GCRA의 허용 패턴이 가장 균일하다. emission_interval 간격으로 정확히 1개씩 허용하기 때문.
+The saturated throughput is the same as Token Bucket and Leaking Bucket, but GCRA's allow pattern is more uniform in this library because the in-memory implementation uses a monotonic floating-point clock and allows exactly 1 request per emission_interval once saturated.
 
 ### `throttled_duration_seconds` (Histogram)
 
-GCRA는 연산이 가장 단순하다:
-- 타임스탬프 비교 1회
-- 덧셈/뺄셈 몇 번
-- 나눗셈 1회 (floor)
+GCRA has the simplest computation:
+- 1 timestamp comparison
+- A few additions/subtractions
+- 1 division (floor)
 
 ```
 latency
@@ -219,49 +219,49 @@ latency
       ├──────────────────────────────────── time
 ```
 
-O(1) 연산, 상태 접근도 GET/SET 1회씩. 이론적으로 가장 가벼운 알고리즘.
+O(1) operations, with only 1 GET/SET for state access each. Theoretically the lightest algorithm.
 
 ### Denied ratio (Gauge)
 
-| 구간 | 순간 차단률 | 특성 |
+| Phase | Instantaneous Block Rate | Characteristics |
 |------|------------|------|
-| Normal / Ramp up | 0% | TAT 여유 |
-| Burst | ~58% | (20 - 8.33) / 20, token bucket과 동일 |
-| Cool down | 0% | TAT 빠르게 하강 |
+| Normal / Ramp up | 0% | TAT has headroom |
+| Burst steady state | ~58% | (20 - 8.33) / 20, same saturated ratio as token bucket |
+| Cool down | 0% | TAT drops quickly |
 
-다른 bucket 계열과 동일한 차단률. GCRA의 차이는 비율이 아니라 **허용 타이밍의 균일성**에 있다.
+The saturated block rate is the same as other bucket-based algorithms. The difference with GCRA lies not in the ratio but in the **uniformity of allow timing**.
 
-## GCRA가 특별한 이유
+## Why GCRA Is Special
 
-### 1. 최소 상태
+### 1. Minimal State
 
-| 알고리즘 | 저장 상태 |
+| Algorithm | Stored State |
 |---------|----------|
-| Token Bucket | tokens + last_refreshed (2개) |
-| Leaking Bucket | tokens + last_refreshed (2개) |
-| Fixed Window | counter (1개, but 키에 윈도우 번호 포함) |
-| Sliding Window | counter × 2 (2개 키) |
-| **GCRA** | **TAT (1개 타임스탬프)** |
+| Token Bucket | tokens + last_refreshed (2 fields) |
+| Leaking Bucket | tokens + last_refreshed (2 fields) |
+| Fixed Window | counter (1 field, but window number included in key) |
+| Sliding Window | counter × 2 (2 keys) |
+| **GCRA** | **TAT (1 timestamp)** |
 
-### 2. 가장 균일한 트래픽 성형
+### 2. Most Uniform Traffic Shaping
 
-Burst 구간에서 허용 패턴 비교:
+Comparison of allow patterns during burst phase:
 
 ```
-Token Bucket:  ✓✓✓✓✓✗✗✗✓✗✗✓✗✗✓✗  (보충 타이밍에 따라 불규칙)
-Leaking Bucket: ✓✓✓✓✓✗✗✗✓✗✗✓✗✗✓✗  (배출 타이밍에 따라 불규칙)
-GCRA:          ✓✓✓✓✓✗✓✗✓✗✓✗✓✗✓✗  (emission_interval마다 정확히 1개)
-Fixed Window:  ✓✓✓✓✓✗✗✗✗✗✗✗✗✗✗✗  (한도 도달 후 전면 차단)
+Token Bucket:  ✓✓✓✓✓✗✗✗✓✓✓✗✗✗✗✗  (batched in `throttled-py` 3.2.0)
+Leaking Bucket: ✓✓✓✓✓✗✗✗✓✓✓✗✗✗✗✗  (batched in `throttled-py` 3.2.0)
+GCRA:          ✓✓✓✓✓✗✓✗✓✗✓✗✓✗✓✗  (exactly 1 per emission_interval)
+Fixed Window:  ✓✓✓✓✓✗✗✗✗✗✗✗✗✗✗✗  (complete block after limit reached)
 ```
 
-GCRA는 ATM 네트워크의 셀 전송 속도 제어에서 유래했으며, 균일한 간격의 트래픽 성형이 핵심 설계 목표다.
+GCRA originated from cell transmission rate control in ATM networks, where uniform-interval traffic shaping was the core design goal.
 
-## 다른 알고리즘과의 차이
+## Differences from Other Algorithms
 
-| 특성 | GCRA | Token Bucket | Fixed Window | Sliding Window |
+| Property | GCRA | Token Bucket | Fixed Window | Sliding Window |
 |------|------|-------------|--------------|----------------|
-| 상태 크기 | 타임스탬프 1개 | 필드 2개 | 카운터 1개 | 카운터 2개 |
-| 허용 균일성 | 가장 균일 | 보충 주기 의존 | 윈도우 초반 집중 | 가중치 변동 |
-| Burst 패턴 | 균일 교차 | 불규칙 교차 | 완전 차단 | 점진적 차단 |
-| 출신 | ATM 네트워크 | 네트워크 QoS | 웹 API | 웹 API |
-| 적합 용도 | 균일 속도 제어, 최소 메모리 | 범용, burst 허용 | 단순 quota | 정밀 제어 |
+| State size | 1 timestamp | 2 fields | 1 counter | 2 counters |
+| Allow uniformity | Most uniform | Depends on refill cycle | Concentrated at start of window | Weight fluctuation |
+| Burst pattern | Uniform alternation | Batched graceful degradation | Complete block | Gradual block |
+| Origin | ATM networks | Network QoS | Web APIs | Web APIs |
+| Best suited for | Uniform rate control, minimal memory | General purpose, burst tolerance | Simple quotas | Precise control |
