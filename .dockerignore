@@ -12,5 +12,12 @@ wheels/
 # Logs
 logs/
 
-# Codex
+# IDE
+.idea/
+
+# AI tools
 .codex
+
+# Git
+.git/
+.gitignore

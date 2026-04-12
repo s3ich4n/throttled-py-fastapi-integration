@@ -7,9 +7,9 @@ A project that visualizes the 5 rate limiting algorithms of the [throttled-py](h
 ```
 ┌─────────────────────────┐
 │  FastAPI (app.py)       │
-│  /sync/{algorithm}/pay  │    OTLP/gRPC    ┌───────────────┐   remote write   ┌────────────┐
+│  /sync/{algorithm}/pay  │    OTLP/gRPC    ┌────────────────┐   remote write  ┌────────────┐
 │  /async/{algorithm}/pay │ ──────────────→ │ OTel Collector │ ──────────────→ │ Prometheus │
-│  :8000 (Docker)         │   :4317         └───────────────┘                  └─────┬──────┘
+│  :8000 (Docker)         │   :4317         └────────────────┘                 └─────┬──────┘
 └─────────────────────────┘                                                          │
                                                                                      │ query
                                                                                ┌─────▼──────┐
