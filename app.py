@@ -10,7 +10,7 @@ from fastapi import FastAPI, Path
 from fastapi.responses import JSONResponse
 from throttled import Throttled, rate_limiter
 from throttled.asyncio import Throttled as AsyncThrottled
-from throttled.asyncio.contrib.otel import AsyncOTelHook
+from throttled.asyncio.contrib.otel import OTelHook as AsyncOTelHook
 from throttled.contrib.otel import OTelHook
 
 duration_view = View(
