@@ -1,21 +1,21 @@
-# Token Bucket 알고리즘과 메트릭 해석
+# Token Bucket Algorithm and Metric Interpretation
 
-## Token Bucket 작동 원리
+## How Token Bucket Works
 
-### 핵심 개념
+### Core Concept
 
-버킷에 토큰이 들어있고, 요청마다 토큰을 꺼낸다. 토큰이 없으면 거부. 토큰은 일정 속도로 자동 보충된다.
+A bucket holds tokens, and each request consumes a token. If there are no tokens, the request is denied. Tokens are automatically replenished at a constant rate.
 
 ```
-              fill_rate (초당 보충)
+              fill_rate (replenish per second)
                   │
                   ▼
         ┌─────────────────┐
-        │ ○ ○ ○ ○ ○ ○ ○ ○ │ ← capacity (최대 토큰 수)
-        │ ○ ○ ○ ○ ○       │ ← tokens (현재 토큰 수)
+        │ ○ ○ ○ ○ ○ ○ ○ ○ │ ← capacity (max number of tokens)
+        │ ○ ○ ○ ○ ○       │ ← tokens (current number of tokens)
         └────────┬────────┘
                  │
-          요청 → 토큰 차감
+          request → deduct token
                  │
            ┌─────┴─────┐
            │            │
@@ -24,30 +24,30 @@
         allowed       denied
 ```
 
-### 파라미터
+### Parameters
 
-`per_min(500)` 설정 시:
+When configured with `per_min(500)`:
 
-| 파라미터 | 값 | 의미 |
+| Parameter | Value | Description |
 |----------|-----|------|
-| capacity | 500 | 버킷 최대 토큰 수 (= burst 허용량) |
-| fill_rate | 8.33 tokens/sec | 초당 보충량 (500 / 60) |
-| emission_interval | 0.12 sec | 토큰 1개 보충 주기 (60 / 500) |
-| cost | 1 (기본값) | 요청 1회당 소모 토큰 |
+| capacity | 500 | Max number of tokens in the bucket (= burst allowance) |
+| fill_rate | 8.33 tokens/sec | Replenishment rate per second (500 / 60) |
+| emission_interval | 0.12 sec | Theoretical average interval for 1 token (60 / 500). In `throttled-py` 3.2.0 token bucket uses whole-second timestamps, so refills happen in whole-token batches based on elapsed seconds |
+| cost | 1 (default) | Tokens consumed per request |
 
-### 요청 처리 흐름
+### Request Processing Flow
 
 ```
-요청 도착
+Request arrives
   │
   ▼
-① 토큰 보충 계산
-  │  time_elapsed = now - last_refreshed
+① Token replenishment calculation
+  │  time_elapsed = now_sec - last_refreshed
   │  tokens_added = floor(time_elapsed × fill_rate)
   │  tokens = min(capacity, old_tokens + tokens_added)
   │
   ▼
-② 토큰 확인
+② Token check
   │  cost > tokens ?
   │
   ├── YES → limited = true  (denied)
@@ -55,29 +55,29 @@
   │
   └── NO  → limited = false (allowed)
             tokens = tokens - cost
-            last_refreshed = now
+            last_refreshed = now_sec
   │
   ▼
-③ 상태 저장
-   { tokens, last_refreshed } → store (memory 또는 Redis)
+③ Save state
+   { tokens, last_refreshed } → store (memory or Redis)
 ```
 
-### 상태 (State)
+### State
 
-| 저장 필드 | 설명 |
+| Stored Field | Description |
 |-----------|------|
-| `tokens` | 현재 남은 토큰 수 (0 ~ capacity) |
-| `last_refreshed` | 마지막 보충 시각 (unix timestamp) |
+| `tokens` | Current remaining token count (0 ~ capacity) |
+| `last_refreshed` | Last replenishment time (integer Unix timestamp in seconds) |
 
-| 파생 필드 | 계산 | 설명 |
+| Derived Field | Calculation | Description |
 |-----------|------|------|
-| `remaining` | = tokens | 남은 요청 가능 횟수 |
-| `reset_after` | = ceil((capacity - tokens) / fill_rate) | 버킷이 가득 차기까지 남은 시간 |
-| `retry_after` | = ceil((cost - tokens) / fill_rate) | denied 시, 재시도 가능까지 남은 시간 |
+| `remaining` | = tokens | Number of remaining allowed requests |
+| `reset_after` | = ceil((capacity - tokens) / fill_rate) | Time remaining until the bucket is full |
+| `retry_after` | = ceil((cost - tokens) / fill_rate) | Time remaining until retry is possible when denied |
 
-## 시간에 따른 토큰 변화
+## Token Changes Over Time
 
-`per_min(500)` 기준, 시나리오별 토큰 흐름:
+Based on `per_min(500)`, token flow by scenario:
 
 ```
 tokens
@@ -85,74 +85,76 @@ tokens
     │              ■■■■■■■■■■
     │  Phase 1          ■       Phase 2
     │  3 req/s          ■       8 req/s
-    │  소모 < 보충       ■       소모 ≈ 보충
-    │  → 항상 가득       ■       → 서서히 감소
+    │  consumption < replenishment       consumption ≈ replenishment
+    │  → always full     ■       → gradually decreasing
     │                    ■
     │                     ■■
     │                       ■
     │                        ■■■     Phase 4
   0 ┤                     ■■■  ■■■   3 req/s
     │              Phase 3       ■■■■■■■■■■
-    │              20 req/s          → 즉시 회복
-    │              소모 >> 보충
-    │              → 바닥 근처 진동
+    │              20 req/s          → immediate recovery
+    │              consumption >> replenishment
+    │              → oscillating near zero
     ├──────────────────────────────────────── time
     0:00    1:00    2:00    3:00    4:00    5:00
 ```
 
-### Phase 3 (Burst) 상세: 왜 교차 패턴이 나타나는가
+### Phase 3 (Burst) Detail: Why Batched Degradation Appears
 
-20 req/s 트래픽에서:
+At 20 req/s traffic:
 
 ```
-시간  토큰  판정     설명
+Time  Tokens  Result    Description
 ─────────────────────────────────────────
-0.00   5   allowed  토큰 있음, 차감 → 4
-0.05   4   allowed  차감 → 3
-0.10   3   allowed  차감 → 2
-0.15   2   allowed  차감 → 1
-0.20   1   allowed  차감 → 0
-0.25   0   denied   토큰 없음
-0.30   0   denied   아직 보충 안 됨
-0.35   0   denied   아직 보충 안 됨
-0.40   1   allowed  0.12초 경과 → 1개 보충됨
-0.45   0   denied   다시 소진
+0.00   5   allowed  Tokens available, deduct → 4
+0.05   4   allowed  Deduct → 3
+0.10   3   allowed  Deduct → 2
+0.15   2   allowed  Deduct → 1
+0.20   1   allowed  Deduct → 0
+0.25   0   denied   No tokens
+0.30   0   denied   Not yet replenished
+...
+~1s    8   allowed  1 elapsed second → floor(1 × 8.33) = 8 tokens replenished, then deduct → 7
+~1s+   7   allowed  The small batch is consumed quickly under 20 req/s traffic
+...
+~1.4s  0   denied   Depleted again until the next whole-second refill
 ...
 ```
 
-fill_rate(8.33/s)보다 요청률(20/s)이 높으므로, 보충되는 즉시 소모 → **allowed/denied 교차 패턴** 발생. 이것이 token bucket의 **graceful degradation** 특성이다. 완전 차단이 아닌, 보충 속도에 비례한 부분 허용.
+Since the request rate (20/s) exceeds the fill_rate (8.33/s), tokens are consumed as soon as they are replenished. The long-term allowed throughput approaches the fill_rate, but in `throttled-py` 3.2.0 the use of whole-second timestamps means the pattern can look like **small allowed batches followed by denials**, rather than a perfectly even 0.12-second alternation. This is still graceful degradation rather than a complete block.
 
-## 메트릭과의 관계
+## Relationship to Metrics
 
 ### `throttled_requests_total` (Counter)
 
 ```
-                    allowed/denied 교차
+                    allowed batches / denied intervals
                          ↓↓↓
 allowed ████████████████▓▓▓▓▓▓▓▓▓▓▓████████
 denied                  ▓▓▓▓▓▓▓▓▓▓▓
         ─────────────────────────────────── time
         Phase 1,2       Phase 3     Phase 4
-        tokens 충분      tokens ≈ 0   tokens 회복
+        tokens sufficient  tokens ≈ 0   tokens recovered
 ```
 
-| 구간 | tokens 상태 | allowed rate | denied rate |
+| Phase | Token State | allowed rate | denied rate |
 |------|-------------|-------------|-------------|
-| Normal (3 req/s) | 항상 500 (가득) | 3/s | 0/s |
-| Ramp up (8 req/s) | 서서히 감소 | 8/s | 0/s |
-| Burst (20 req/s) | 바닥 진동 (0~1) | ~8.33/s (= fill_rate) | ~11.67/s |
-| Cool down (3 req/s) | 즉시 회복 | 3/s | 0/s |
+| Normal (3 req/s) | Always 500 (full) | 3/s | 0/s |
+| Ramp up (8 req/s) | Gradually decreasing | 8/s | 0/s |
+| Burst (20 req/s) | Usually near zero; periodically refilled in small whole-second batches | ~8.33/s long-term (= fill_rate) | ~11.67/s after the initial capacity is exhausted |
+| Cool down (3 req/s) | Immediate recovery | 3/s | 0/s |
 
-Burst 구간에서 allowed rate가 fill_rate에 수렴하는 것은 token bucket의 본질적 특성이다. 아무리 트래픽이 몰려도 보충 속도 이상으로 허용할 수 없다.
+During the burst phase, the allowed rate converges to the fill_rate after the initial capacity has been consumed. No matter how much traffic surges, sustained throughput cannot exceed the replenishment rate.
 
 ### `throttled_duration_seconds` (Histogram)
 
-token bucket 연산은 단순한 산술:
-- 뺄셈 (`tokens - cost`)
-- 비교 (`cost > tokens`)
-- 곱셈 (`time_elapsed × fill_rate`)
+The token bucket operation is simple arithmetic:
+- Subtraction (`tokens - cost`)
+- Comparison (`cost > tokens`)
+- Multiplication (`time_elapsed × fill_rate`)
 
-따라서 in-memory store 기준 p99 ~50μs로 매우 빠르다. 이 latency는 알고리즘 자체보다 Python 함수 호출 오버헤드에 가깝다.
+Therefore, with an in-memory store, it is very fast at p99 ~50μs. This latency is closer to Python function call overhead than the algorithm itself.
 
 ```
 latency
@@ -168,7 +170,7 @@ latency
       ├──────────────────────────────────── time
 ```
 
-트래픽 변화에도 latency가 일정한 이유: token bucket은 요청량과 무관하게 O(1) 연산이기 때문.
+The reason latency remains constant despite traffic changes: token bucket is an O(1) operation regardless of request volume.
 
 ### Denied ratio (Gauge)
 
@@ -176,20 +178,20 @@ latency
 denied ratio = denied / (allowed + denied)
 ```
 
-| 구간 | 순간 차단률 | 계산 |
+| Phase | Instantaneous Denial Rate | Calculation |
 |------|------------|------|
-| Normal / Ramp up | 0% | 토큰 충분 |
-| Burst | ~58% | (20 - 8.33) / 20 |
-| Cool down | 0% | 토큰 즉시 회복 |
-| 누적 | 15.6% | 450 / (2430 + 450) |
+| Normal / Ramp up | 0% | Sufficient tokens |
+| Burst steady state | ~58% | (20 - 8.33) / 20, after the initial bucket capacity is exhausted |
+| Cool down | 0% | Tokens immediately recovered |
+| Cumulative | 15.6% | 450 / (2430 + 450) |
 
-운영 알람은 누적 비율이 아닌 `rate()` 기반 순간 차단률로 설정해야 burst 감지가 가능하다.
+Operational alerts should be based on `rate()`-based instantaneous denial rate rather than cumulative ratio to enable burst detection.
 
-## 다른 알고리즘과의 차이
+## Differences from Other Algorithms
 
-| 특성 | Token Bucket | Fixed Window | Sliding Window |
+| Characteristic | Token Bucket | Fixed Window | Sliding Window |
 |------|-------------|--------------|----------------|
-| Burst 허용 | capacity만큼 순간 burst 가능 | 윈도우 경계에서 2배 burst 가능 | burst 불가 (정확한 제한) |
-| Denied 패턴 | 교차 (graceful degradation) | 윈도우 후반 완전 차단 | 균일 차단 |
-| 메모리 | O(1) - 2개 필드 | O(1) - 카운터 1개 | O(N) - 요청 타임스탬프 |
-| 정확도 | 장기 평균 정확 | 윈도우 경계 부정확 | 가장 정확 |
+| Burst Allowance | Instant burst up to capacity | Up to 2x burst at window boundary | Boundary burst is smoothed by weighted previous-window usage |
+| Denied Pattern | Batched graceful degradation in this implementation | Complete block in latter half of window | Gradual throttling |
+| Memory | O(1) - 2 fields | O(1) - 1 counter | O(1) - 2 counters |
+| Accuracy | Accurate over long-term average | Inaccurate at boundaries | More accurate near window boundaries |

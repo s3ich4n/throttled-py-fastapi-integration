@@ -172,7 +172,7 @@ requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.129.2" },
     { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.39.1" },
     { name = "opentelemetry-sdk", specifier = ">=1.39.1" },
-    { name = "throttled-py", extras = ["otel"], git = "https://github.com/s3ich4n/throttled-py.git?rev=feat%2Fissue_37_async_hook" },
+    { name = "throttled-py", extras = ["otel"], specifier = ">=3.2.0" },
     { name = "uvicorn", specifier = ">=0.41.0" },
 ]
 
@@ -813,8 +813,12 @@ wheels = [
 
 [[package]]
 name = "throttled-py"
-version = "3.1.1"
-source = { git = "https://github.com/s3ich4n/throttled-py.git?rev=feat%2Fissue_37_async_hook#b22adb913d692b1fa368658bd29c7977a039a75b" }
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c3/af/15a5baab9e14d123944f7e22457be91ba526cb7f03acecd3a6e751f0a060/throttled_py-3.2.0.tar.gz", hash = "sha256:a168ad3c0b77efd3cef10120b2e4e52100018e6c02f9d5e1f064bb84c7b39d74", size = 845381, upload-time = "2026-04-03T01:38:31.171Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/39/001735c22a2fc5b0334b0fd100698f1269d62ad051c0ea1d21e4b0e56657/throttled_py-3.2.0-py3-none-any.whl", hash = "sha256:a12585da08b20382cfcdfc261441341ffd4a35d9d40c28de50ba63774481bcca", size = 65880, upload-time = "2026-04-03T01:38:29.647Z" },
+]
 
 [package.optional-dependencies]
 otel = [

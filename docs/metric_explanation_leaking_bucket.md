@@ -1,22 +1,22 @@
-# Leaking Bucket 알고리즘과 메트릭 해석
+# Leaking Bucket Algorithm and Metric Interpretation
 
-## Leaking Bucket 작동 원리
+## How the Leaking Bucket Works
 
-### 핵심 개념
+### Core Concept
 
-버킷에 요청(물)이 쌓이고, 일정 속도로 빠져나간다. 버킷이 가득 차면 거부. Token bucket의 **역전** 모델이다.
+Requests (water) accumulate in a bucket and drain out at a constant rate. When the bucket is full, requests are rejected. It is the **inverse** model of the token bucket.
 
 ```
-          요청 → 물 추가 (cost)
+          Request → Add water (cost)
                   │
                   ▼
         ┌─────────────────┐
-        │ ● ● ● ● ● ● ● ● │ ← capacity (버킷 용량)
-        │ ● ● ● ● ●       │ ← tokens (현재 수위)
+        │ ● ● ● ● ● ● ● ● │ ← capacity (bucket size)
+        │ ● ● ● ● ●       │ ← tokens (current water level)
         └────────┬────────┘
                  │
                  ▼
-           leak_rate (초당 배출)
+           leak_rate (drain per second)
                  │
            ┌─────┴─────┐
            │            │
@@ -25,31 +25,31 @@
         allowed       denied
 ```
 
-### Token Bucket과의 핵심 차이
+### Key Differences from Token Bucket
 
-| 관점 | Token Bucket | Leaking Bucket |
+| Aspect | Token Bucket | Leaking Bucket |
 |------|-------------|----------------|
-| 버킷 의미 | "사용 가능한 토큰" | "쌓인 요청(물)" |
-| 초기 상태 | 가득 참 (capacity) | 비어 있음 (0) |
-| 요청 시 | 토큰 차감 (tokens - cost) | 물 추가 (tokens + cost) |
-| 시간 경과 | 토큰 보충 (+) | 물 배출 (-) |
-| 거부 조건 | tokens < cost | tokens + cost > capacity |
+| Bucket meaning | "Available tokens" | "Accumulated requests (water)" |
+| Initial state | Full (capacity) | Empty (0) |
+| On request | Deduct tokens (tokens - cost) | Add water (tokens + cost) |
+| Over time | Tokens replenish (+) | Water drains (-) |
+| Denial condition | tokens < cost | tokens + cost > capacity |
 
-둘 다 동일한 처리량을 달성하지만, 정신 모델이 반대이다.
+Both achieve the same throughput, but the mental model is reversed.
 
-### 판정 로직
+### Decision Logic
 
 ```
-요청 도착
+Request arrives
   │
   ▼
-① 배출 계산 (leak)
-  │  time_elapsed = now - last_refreshed
+① Calculate drain (leak)
+  │  time_elapsed = now_sec - last_refreshed
   │  leaked = floor(time_elapsed × leak_rate)
   │  tokens = max(0, old_tokens - leaked)
   │
   ▼
-② 용량 확인
+② Check capacity
   │  tokens + cost > capacity ?
   │
   ├── YES → limited = true  (denied)
@@ -57,44 +57,44 @@
   │
   └── NO  → limited = false (allowed)
             tokens = tokens + cost
-            last_refreshed = now
+            last_refreshed = now_sec
   │
   ▼
-③ 상태 저장
-   { tokens, last_refreshed } → store (memory 또는 Redis)
+③ Save state
+   { tokens, last_refreshed } → store (memory or Redis)
 ```
 
-### 파라미터
+### Parameters
 
-`per_min(500)` 설정 시:
+When configured with `per_min(500)`:
 
-| 파라미터 | 값 | 의미 |
+| Parameter | Value | Meaning |
 |----------|-----|------|
-| capacity | 500 | 버킷 최대 용량 (= burst 허용량) |
-| leak_rate | 8.33 req/sec | 초당 배출 속도 (500 / 60) |
-| cost | 1 (기본값) | 요청 1회당 추가되는 물의 양 |
+| capacity | 500 | Maximum bucket size (= burst allowance) |
+| leak_rate | 8.33 req/sec | Average drain rate per second (500 / 60). In `throttled-py` 3.2.0 leaking bucket uses whole-second timestamps, so draining happens in whole-token batches based on elapsed seconds |
+| cost | 1 (default) | Amount of water added per request |
 
-leak_rate = token bucket의 fill_rate와 동일한 값. 방향만 반대.
+leak_rate = same value as fill_rate in token bucket. Only the direction is reversed. Because this implementation uses whole-second timestamps, the observed drain cadence is batched even though the average rate is 8.33/sec.
 
-### 상태 (State)
+### State
 
-| 저장 필드 | 설명 |
+| Stored Field | Description |
 |-----------|------|
-| `tokens` | 현재 버킷 수위 — 쌓인 요청 수 (0 ~ capacity) |
-| `last_refreshed` | 마지막 배출 시각 (unix timestamp) |
+| `tokens` | Current bucket water level — number of accumulated requests (0 ~ capacity) |
+| `last_refreshed` | Last drain time (integer Unix timestamp in seconds) |
 
-| 파생 필드 | 계산 | 설명 |
+| Derived Field | Calculation | Description |
 |-----------|------|------|
-| `remaining` | = capacity - tokens | 남은 여유 공간 |
-| `reset_after` | = ceil(tokens / leak_rate) | 버킷이 비기까지 남은 시간 |
-| `retry_after` | = ceil((cost - remaining) / leak_rate) | denied 시, 재시도 가능까지 |
+| `remaining` | = capacity - tokens | Remaining available space |
+| `reset_after` | = ceil(tokens / leak_rate) | Time remaining until the bucket is empty |
+| `retry_after` | = ceil((cost - remaining) / leak_rate) | When denied, time until retry is possible |
 
-## 시간에 따른 수위 변화
+## Water Level Changes Over Time
 
-`per_min(500)` 기준, 시나리오별 수위 흐름:
+Based on `per_min(500)`, water level flow by scenario:
 
 ```
-tokens (수위)
+tokens (water level)
 500 ┤                     ■■■  ■■■
     │                    ■  ■■■  ■■■     capacity
     │                   ■            ■
@@ -102,67 +102,67 @@ tokens (수위)
     │              ■■■■                ■
     │  Phase 1   ■      Phase 2        ■   Phase 4
     │  3 req/s  ■       8 req/s         ■  3 req/s
-    │  유입<배출 ■       유입≈배출        ■  유입<배출
-    │  → 수위 0  ■      → 수위 상승       ■ → 수위 하강
+    │  in<drain ■       in≈drain        ■  in<drain
+    │  → level 0 ■      → level rises    ■ → level drops
   0 ┤■■■■■■■■■■■                          ■■■■■■■■
     ├──────────────────────────────────────── time
     0:00    1:00    2:00    3:00    4:00    5:00
 ```
 
-Token bucket의 토큰 그래프를 **상하 반전**한 것과 동일한 형태.
+Over longer windows, this is roughly the token bucket's token graph **flipped vertically**.
 
-### Phase 3 (Burst) 상세
+### Phase 3 (Burst) Detail
 
-20 req/s 트래픽에서:
+At 20 req/s traffic:
 
 ```
-시간   수위   판정     설명
+Time   Level  Decision   Description
 ────────────────────────────────────────────
-0.00    1    allowed  물 추가, 수위 1
-0.05    2    allowed  물 추가, 수위 2
+0.00    1    allowed  Water added, level 1
+0.05    2    allowed  Water added, level 2
 ...
-0.00  499    allowed  아직 여유 1
-0.05  500    allowed  수위 = capacity (가득)
-0.10  501    denied   넘침! (실제로는 추가 안 됨)
-0.12  500    denied   0.12초 경과, 1개 배출 → 수위 499
-                      하지만 500 + 1 > 500 이므로 여전히...
-                      아니, 499 + 1 = 500 ≤ 500 → allowed!
-0.17  500    allowed  배출 1개 → 빈 자리에 1개 추가
-0.22  501    denied   다시 가득
+0.00  499    allowed  Still 1 space left
+0.05  500    allowed  Level = capacity (full)
+0.10  501    denied   Overflow! (not actually added)
+0.15  500    denied   Still in the same integer second, nothing drained yet
+...
+~1s   492    allowed  1 elapsed second → floor(1 × 8.33) = 8 drained, then +1
+~1s+  500    allowed  Freed capacity is consumed quickly under 20 req/s traffic
+~1.4s 500    denied   Full again until the next whole-second drain
 ...
 ```
 
-Token bucket과 동일한 **교차 패턴** — leak_rate만큼만 허용하고 나머지를 거부한다. 이것은 수학적으로 동치이기 때문이다.
+The long-term throughput is the same as token bucket: only the leak_rate amount is allowed after the initial capacity is exhausted and the rest is denied. In this implementation, however, the observed pattern is closer to **small allowed batches followed by denials** because the drain calculation uses elapsed whole seconds.
 
-## 메트릭과의 관계
+## Relationship with Metrics
 
 ### `throttled_requests_total` (Counter)
 
 ```
-                    allowed/denied 교차
+                    allowed batches / denied intervals
                          ↓↓↓
 allowed ████████████████▓▓▓▓▓▓▓▓▓▓▓████████
 denied                  ▓▓▓▓▓▓▓▓▓▓▓
         ─────────────────────────────────── time
         Phase 1,2       Phase 3     Phase 4
-        수위 여유        수위 ≈ cap   수위 하강
+        level has room   level ≈ cap  level dropping
 ```
 
-| 구간 | 수위 상태 | allowed rate | denied rate |
+| Phase | Level State | allowed rate | denied rate |
 |------|----------|-------------|-------------|
-| Normal (3 req/s) | 0 (항상 비어 있음) | 3/s | 0/s |
-| Ramp up (8 req/s) | 점진 상승 | 8/s | 0/s |
-| Burst (20 req/s) | capacity 근처 진동 | ~8.33/s (= leak_rate) | ~11.67/s |
-| Cool down (3 req/s) | 빠르게 하강 | 3/s | 0/s |
+| Normal (3 req/s) | 0 (always empty) | 3/s | 0/s |
+| Ramp up (8 req/s) | Gradually rising | 8/s | 0/s |
+| Burst (20 req/s) | Usually near capacity; periodically drains in small whole-second batches | ~8.33/s long-term (= leak_rate) | ~11.67/s after the initial capacity is exhausted |
+| Cool down (3 req/s) | Rapidly dropping | 3/s | 0/s |
 
-Token bucket과 사실상 동일한 메트릭 패턴. 내부 모델은 다르지만 외부에서 관측되는 동작은 같다.
+Effectively the same long-term metric pattern as token bucket. The internal model differs, but both converge to the configured rate after the initial capacity is exhausted.
 
 ### `throttled_duration_seconds` (Histogram)
 
-Token bucket과 동일한 연산 구조:
-- 뺄셈 (`tokens - leaked`)
-- 덧셈 (`tokens + cost`)
-- 비교 (`> capacity`)
+Same computational structure as token bucket:
+- Subtraction (`tokens - leaked`)
+- Addition (`tokens + cost`)
+- Comparison (`> capacity`)
 
 ```
 latency
@@ -178,38 +178,38 @@ latency
       ├──────────────────────────────────── time
 ```
 
-O(1) 연산. Token bucket과 동일한 수준의 latency를 기대할 수 있다.
+O(1) operation. You can expect the same level of latency as token bucket.
 
 ### Denied ratio (Gauge)
 
-| 구간 | 순간 차단률 | 계산 |
+| Phase | Instantaneous Block Rate | Calculation |
 |------|------------|------|
-| Normal / Ramp up | 0% | 수위 낮음 |
-| Burst | ~58% | (20 - 8.33) / 20 |
-| Cool down | 0% | 수위 빠르게 하강 |
+| Normal / Ramp up | 0% | Level is low |
+| Burst steady state | ~58% | (20 - 8.33) / 20, after the initial bucket capacity is exhausted |
+| Cool down | 0% | Level drops rapidly |
 
-Token bucket과 동일한 비율. 두 알고리즘은 수학적으로 동치이므로 메트릭 상 구분이 어렵다.
+Same steady-state ratio as token bucket. Since the two algorithms are mathematically equivalent at the rate/capacity level, they are hard to distinguish from aggregate metrics alone.
 
-## Token Bucket과 정말 같은가?
+## Is It Really the Same as Token Bucket?
 
-메트릭 관점에서는 동일한 결과를 보이지만, 미묘한 차이가 있다:
+From an aggregate metrics perspective they show very similar results, but there are subtle differences:
 
-| 관점 | Token Bucket | Leaking Bucket |
+| Aspect | Token Bucket | Leaking Bucket |
 |------|-------------|----------------|
-| 첫 요청 | tokens=capacity, 즉시 허용 | tokens=0, 즉시 허용 |
-| 초기 burst | capacity만큼 즉시 소화 | capacity만큼 즉시 소화 |
-| retry_after 계산 | (cost - tokens) / fill_rate | (cost - remaining) / leak_rate |
-| 정신 모델 | "잔액 확인" | "용량 확인" |
-| 코드 가독성 | 토큰이 충분한가? | 공간이 있는가? |
+| First request | tokens=capacity, immediately allowed | tokens=0, immediately allowed |
+| Initial burst | Handles up to capacity immediately | Handles up to capacity immediately |
+| retry_after calculation | (cost - tokens) / fill_rate | (cost - remaining) / leak_rate |
+| Mental model | "Check balance" | "Check capacity" |
+| Code readability | Are there enough tokens? | Is there space available? |
 
-실무에서는 팀의 멘탈 모델에 맞는 쪽을 선택한다.
+In practice, choose whichever matches your team's mental model.
 
-## 다른 알고리즘과의 차이
+## Differences from Other Algorithms
 
-| 특성 | Leaking Bucket | Token Bucket | Fixed Window | Sliding Window |
+| Characteristic | Leaking Bucket | Token Bucket | Fixed Window | Sliding Window |
 |------|---------------|-------------|--------------|----------------|
-| 모델 | 물 채우기/배출 | 토큰 소모/보충 | 카운터 리셋 | 가중 평균 |
-| Burst 패턴 | 교차 (graceful) | 교차 (graceful) | 완전 차단 구간 | 점진적 차단 |
-| 메트릭 패턴 | ≈ Token Bucket | ≈ Leaking Bucket | 계단형 | 부드러운 곡선 |
-| 저장 공간 | O(1) - 2개 필드 | O(1) - 2개 필드 | O(1) - 1개 | O(1) - 2개 카운터 |
-| 적합 용도 | "용량" 관점 선호 시 | "잔액" 관점 선호 시 | 단순 quota | 정밀 제어 |
+| Model | Fill/drain water | Consume/replenish tokens | Counter reset | Weighted average |
+| Burst pattern | Batched graceful degradation | Batched graceful degradation | Full block period | Gradual blocking |
+| Metric pattern | ≈ Token Bucket over longer windows | ≈ Leaking Bucket over longer windows | Step-shaped | Smooth curve |
+| Storage space | O(1) - 2 fields | O(1) - 2 fields | O(1) - 1 field | O(1) - 2 counters |
+| Best suited for | When "capacity" perspective is preferred | When "balance" perspective is preferred | Simple quota | Precise control |

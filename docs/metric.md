@@ -1,31 +1,31 @@
-# throttled-py OTel Metric 검증
+# throttled-py OTel Metric Verification
 
-## 준비
+## Preparation
 
-### 구성 요소
+### Components
 
-| 서비스 | 역할 |
-|--------|------|
-| FastAPI (`app.py`) | throttled-py + OTelHook/AsyncOTelHook 적용 앱 (Docker) |
-| OTel Collector | OTLP 수신 → Prometheus remote write |
-| Prometheus | 메트릭 저장소 |
-| Grafana | 대시보드 시각화 |
+| Service | Role |
+|---------|------|
+| FastAPI (`app.py`) | App with throttled-py + OTelHook/AsyncOTelHook applied (Docker) |
+| OTel Collector | Receives OTLP → Prometheus remote write |
+| Prometheus | Metric storage |
+| Grafana | Dashboard visualization |
 
-### OTelHook / AsyncOTelHook이 기록하는 메트릭
+### Metrics Recorded by OTelHook / AsyncOTelHook
 
-sync(`OTelHook`)와 async(`AsyncOTelHook`) 모두 동일한 메트릭을 기록한다. `key` 레이블(`/sync/...` vs `/async/...`)로 구분된다.
+Both sync (`OTelHook`) and async (`AsyncOTelHook`) record the same metrics. They are distinguished by the `key` label (`/sync/...` vs `/async/...`).
 
-| OTel 이름 | Prometheus 변환 | 타입 | 설명 |
-|-----------|----------------|------|------|
-| `throttled.requests` | `throttled_requests_total` | Counter | rate limit 체크 횟수 (label: `result=allowed\|denied`) |
-| `throttled.duration` | `throttled_duration_seconds_*` | Histogram | rate limit 체크 소요 시간 |
+| OTel Name | Prometheus Conversion | Type | Description |
+|-----------|----------------------|------|-------------|
+| `throttled.requests` | `throttled_requests_total` | Counter | Number of rate limit checks (label: `result=allowed\|denied`) |
+| `throttled.duration` | `throttled_duration_seconds_*` | Histogram | Time taken for rate limit checks |
 
-### Histogram bucket boundary 보정
+### Histogram Bucket Boundary Correction
 
-OTel SDK의 기본 histogram bucket boundary는 초 단위(`0.005, 0.01, 0.025, ...`)로 설정되어 있음.
-in-memory token bucket 연산은 마이크로초 단위이므로, 모든 샘플이 첫 번째 bucket에 몰려 `histogram_quantile`이 무의미한 값(p50=2.5s 등)을 반환함.
+In OpenTelemetry SDK 1.39.1, the default histogram bucket boundaries are large for a latency metric recorded in seconds (`0, 5, 10, 25, ...` seconds).
+Since in-memory rate-limit checks are on the microsecond scale, all samples fall into the first bucket, causing `histogram_quantile` to return meaningless values (e.g., p50 around 2.5s).
 
-`ExplicitBucketHistogramAggregation` View로 마이크로초 스케일 boundary를 지정하여 해결:
+This is resolved by specifying microsecond-scale boundaries using an `ExplicitBucketHistogramAggregation` View:
 
 ```python
 from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
@@ -49,11 +49,11 @@ duration_view = View(
 )
 ```
 
-## Grafana 대시보드
+## Grafana Dashboard
 
-대시보드 상단에 `mode`(sync/async) 드롭다운이 있으며, 모든 쿼리에 `key=~"/${mode}/.*"` 필터가 적용된다.
+A `mode` (sync/async) dropdown is available at the top of the dashboard, and all queries have the `key=~"/${mode}/.*"` filter applied.
 
-### 패널 구성
+### Panel Configuration
 
 #### 1. Requests / sec (allowed vs denied)
 
@@ -83,25 +83,25 @@ histogram_quantile(0.95, sum by (le) (rate(throttled_duration_seconds_bucket{alg
 histogram_quantile(0.99, sum by (le) (rate(throttled_duration_seconds_bucket{algorithm="$algorithm", key=~"/${mode}/.*"}[1m])))
 ```
 
-`sum by (le)`는 `result` label(allowed/denied)을 합산하여 단일 시리즈로 만듦.
+`sum by (le)` aggregates the `result` label (allowed/denied) into a single series.
 
-## 결과
+## Results
 
-설정: `per_min(500)` (token bucket), in-memory store
+Configuration: `per_min(500)`, in-memory store. The scenario was run against each algorithm for 5 minutes, but the numbers below should be treated as a rough observation rather than a precise benchmark. The goal is to confirm that the limiter and metrics pipeline behave as expected and to compare the broad algorithm patterns.
 
-### 시나리오 (5분)
+### Scenario (5 minutes)
 
-| Phase | 시간 | 트래픽 | 결과 |
-|-------|------|--------|------|
-| 1. Normal | 0:00 - 1:00 | 3 req/s (180/min) | 전량 allowed |
-| 2. Ramp up | 1:00 - 2:30 | 8 req/s (480/min) | 전량 allowed (한계선) |
-| 3. Burst | 2:30 - 4:00 | 20 req/s (1200/min) | allowed/denied 교차 |
-| 4. Cool down | 4:00 - 5:00 | 3 req/s (180/min) | 즉시 회복, 전량 allowed |
+| Phase | Time | Traffic | Result |
+|-------|------|---------|--------|
+| 1. Normal | 0:00 - 1:00 | 3 req/s (180/min) | All allowed |
+| 2. Ramp up | 1:00 - 2:30 | 8 req/s (480/min) | All allowed (near limit) |
+| 3. Burst | 2:30 - 4:00 | 20 req/s (1200/min) | Mixed allowed/denied after available capacity is exhausted |
+| 4. Cool down | 4:00 - 5:00 | 3 req/s (180/min) | Immediate recovery, all allowed |
 
-### 측정 결과
+### Measurement Results
 
-| 지표 | 값 |
-|------|-----|
+| Metric | Value |
+|--------|-------|
 | Total allowed | 2,430 |
 | Total denied | 450 |
 | Denied ratio | 15.6% |
@@ -109,8 +109,8 @@ histogram_quantile(0.99, sum by (le) (rate(throttled_duration_seconds_bucket{alg
 | Latency p95 | ~35μs |
 | Latency p99 | ~50μs |
 
-### 분석
+### Analysis
 
-- **Rate limiter 동작**: burst 구간에서 token bucket이 토큰 보충 주기에 따라 allowed/denied를 교차 반환. 완전 차단이 아닌 graceful degradation 패턴
-- **Denied ratio 해석**: 누적 15.6%이지만, burst 구간만 보면 ~53% 차단. 운영 알람용으로는 `rate()` 기반 순간 차단률을 별도로 설정 필요
-- **Latency 오버헤드**: in-memory store 기준 p99 ~50μs. 비즈니스 로직 대비 오버헤드 0.01% 미만으로 무시 가능. Redis 전환 시 ms 단위로 상승할 수 있으므로 latency 모니터링 의미가 커짐
+- **Rate limiter behavior**: During the burst phase, the token bucket still allows some traffic as tokens refill. In `throttled-py` 3.2.0 this refill is based on whole-second timestamps, so the allowed/denied pattern can appear in coarse batches rather than at a perfectly even 0.12s cadence.
+- **Denied ratio interpretation**: The cumulative denied ratio is 15.6%. With the measured 450 denials over the 90-second burst phase (1,800 requests), the phase-wide burst denial rate is 25%; after the initial bucket capacity is exhausted, the instantaneous denial rate moves toward roughly `(20 - 8.33) / 20 ≈ 58%`. For operational alerting, a separate instantaneous denial rate based on `rate()` should be configured.
+- **Latency overhead**: With an in-memory store, p99 is ~50μs. Compared to business logic, this overhead is less than 0.01% and can be considered negligible. When switching to Redis, latency may increase to the millisecond range, making latency monitoring significantly more important.

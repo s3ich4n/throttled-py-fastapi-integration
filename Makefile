@@ -12,8 +12,13 @@ MODE       ?= sync
 build:
 	docker compose build
 
+LOG_DIR  := logs
+LOG_FILE = $(LOG_DIR)/$(shell date +%Y%m%d_%H%M%S)_$(MODE).log
+
 up:
-	docker compose up -d
+	@mkdir -p $(LOG_DIR)
+	nohup sh -c 'docker compose up 2>&1' >> $(LOG_FILE) &
+	@echo "Logs: $(LOG_FILE)"
 
 down:
 	docker compose down -v

@@ -1,93 +1,93 @@
-# Sliding Window 알고리즘과 메트릭 해석
+# Sliding Window Algorithm and Metric Interpretation
 
-## Sliding Window 작동 원리
+## How the Sliding Window Works
 
-### 핵심 개념
+### Core Concept
 
-이전 윈도우와 현재 윈도우의 카운터를 **가중 평균**으로 합산한다. 현재 윈도우에서 경과한 시간 비율만큼 이전 윈도우의 가중치를 줄여, Fixed Window의 경계 문제를 해결한다.
+The counters from the previous window and the current window are combined using a **weighted average**. The weight of the previous window is reduced proportionally to the elapsed time in the current window, solving the boundary problem of Fixed Window.
 
 ```
-        이전 윈도우 (prev)          현재 윈도우 (curr)
+        Previous Window (prev)          Current Window (curr)
    ┌─────────────────────────┬─────────────────────────┐
    │  counter: 400           │  counter: 100           │
    └─────────────────────────┴─────────────────────────┘
-                              │←── 40% 경과 ──→│
+                              │←── 40% elapsed ──→│
 
-   현재 비율 = 0.4    (윈도우의 40% 지점)
-   이전 비율 = 0.6    (이전 윈도우의 60%가 아직 유효)
+   Current ratio = 0.4    (at the 40% point of the window)
+   Previous ratio = 0.6   (60% of the previous window is still valid)
 
-   가중 합산 = floor(0.6 × 400) + 100 + cost
-            = 240 + 100 + 1
-            = 341
+   Weighted sum = floor(0.6 × 400) + 100 + cost
+               = 240 + 100 + 1
+               = 341
 
    341 ≤ 500 → allowed
 ```
 
-### 판정 로직
+### Decision Logic
 
 ```
-요청 도착
+Request arrives
   │
   ▼
-① 윈도우 카운터 조회
+① Retrieve window counters
   │  curr_key = "{key}:period:{now // period}"
   │  prev_key = "{key}:period:{now // period - 1}"
   │  current = GET(curr_key) or 0
   │  previous = GET(prev_key) or 0
   │
   ▼
-② 가중 합산
+② Weighted sum calculation
   │  elapsed_ratio = (now_ms % period_ms) / period_ms
   │  prev_weight = 1 - elapsed_ratio
   │  weighted_prev = floor(prev_weight × previous)
   │  used = weighted_prev + current + cost
   │
   ▼
-③ 한도 확인
+③ Limit check
   │  used > limit ?
   │
   ├── YES → limited = true  (denied)
-  │         카운터 증가 안 함
+  │         Counter is NOT incremented
   │
   └── NO  → limited = false (allowed)
             INCRBY(curr_key, cost)
 ```
 
-### 파라미터
+### Parameters
 
-`per_min(500)` 설정 시:
+When configured with `per_min(500)`:
 
-| 파라미터 | 값 | 의미 |
-|----------|-----|------|
-| limit | 500 | 슬라이딩 윈도우 최대 요청 수 |
-| period | 60 sec | 윈도우 크기 |
-| cost | 1 (기본값) | 요청 1회당 소모량 |
+| Parameter | Value | Meaning |
+|-----------|-------|---------|
+| limit | 500 | Maximum requests in the sliding window |
+| period | 60 sec | Window size |
+| cost | 1 (default) | Consumption per request |
 
-### 상태 (State)
+### State
 
-| 저장 필드 | 설명 |
-|-----------|------|
-| `current_counter` | 현재 윈도우의 요청 수 |
-| `previous_counter` | 이전 윈도우의 요청 수 |
+| Stored Field | Description |
+|--------------|-------------|
+| `current_counter` | Number of requests in the current window |
+| `previous_counter` | Number of requests in the previous window |
 
-| 파생 필드 | 계산 | 설명 |
-|-----------|------|------|
-| `remaining` | = max(0, limit - used) | 남은 요청 가능 수 |
-| `reset_after` | = period | 현재 윈도우 전체 길이 |
-| `retry_after` | = prev_weight × period × cost / previous | 이전 윈도우 가중치가 충분히 줄어들 때까지 |
+| Derived Field | Calculation | Description |
+|---------------|-------------|-------------|
+| `remaining` | = max(0, limit - used) | Number of remaining allowed requests |
+| `reset_after` | = period | Total length of the current window |
+| `retry_after` | ≈ time until weighted previous-window usage decreases enough | Approximate wait time before the next request can fit within the weighted window |
 
-핵심: **denied 시 카운터를 증가시키지 않는다**. Token bucket, Fixed Window와 달리 거부된 요청은 상태를 변경하지 않는다.
+Key point: **The counter is NOT incremented on denial**. Unlike Token Bucket and Fixed Window, denied requests do not change the state.
 
-## 시간에 따른 가중 합산 변화
+## How the Weighted Sum Changes Over Time
 
-`per_min(500)` 기준:
+Based on `per_min(500)`:
 
 ```
-used (가중 합산)
+used (weighted sum)
 500 ┤                          ■■■━━━━━━━━━━━
     │                        ■■   ↑ limit
-    │                      ■■     denied 시작
-    │                    ■■       (하지만 카운터 불변)
+    │                      ■■     denial starts
+    │                    ■■       (but counter unchanged)
     │          ■■■■■■■■■■
     │        ■■
     │ ■■■■■■■
@@ -95,87 +95,88 @@ used (가중 합산)
   0 ┤──────────────────────────────────────────
     │  Phase 1     Phase 2      Phase 3
     │
-    │  가중 합산이 점진적으로 증가
-    │  윈도우 경계에서 급격한 변화 없음
+    │  Weighted sum increases gradually
+    │  No abrupt changes at window boundaries
     ├──────────────────────────────────────── time
     0:00    1:00    2:00    3:00    4:00    5:00
 ```
 
-### 가중 평균이 경계 문제를 해결하는 방법
+### How the Weighted Average Solves the Boundary Problem
 
-Fixed Window의 2배 burst 문제가 발생하지 않는다:
+The 2x burst problem of Fixed Window does not occur:
 
 ```
        Fixed Window:
-       window A 후반: 490 req    window B 초반: 500 req
+       Late window A: 490 req    Early window B: 500 req
        ─────────────────────┃─────────────────────
-       2초 동안 990 req 허용 (limit의 2배!)
+       990 req allowed in 2 seconds (2x the limit!)
 
        Sliding Window:
-       window A 후반: 490 req    window B 초반 시도
+       Late window A: 490 req    Early window B attempt
        ─────────────────────┃─────────────────────
-       B 시작 직후: used = floor(0.99 × 490) + 0 + 1 = 486
+       Right after B starts: used = floor(0.99 × 490) + 0 + 1 = 486
        486 ≤ 500 → allowed
        ...
        used = floor(0.99 × 490) + 14 + 1 = 500
        500 ≤ 500 → allowed
        used = floor(0.99 × 490) + 15 + 1 = 501
-       501 > 500 → denied ← 15번째에서 차단
+       501 > 500 → denied ← blocked at the 15th request
 ```
 
-이전 윈도우의 가중치가 천천히 감소하므로, 경계를 넘는 순간에도 이전 트래픽이 반영된다.
+Since the previous window's weight decreases slowly, the previous traffic is still reflected even at the moment of crossing the boundary.
 
-### Phase 3 (Burst) 상세: 왜 점진적 차단이 나타나는가
+### Phase 3 (Burst) Detail: Why Gradual Throttling Occurs
 
-20 req/s 트래픽, 윈도우 30초 지점 (prev_weight=0.5) 기준:
+At 20 req/s traffic, at the 30-second mark of the window (prev_weight=0.5):
 
 ```
-시간   prev  curr  가중합산  판정     설명
+Time   prev  curr  weighted_sum  decision  description
 ──────────────────────────────────────────────
-0.00   200   201   301      allowed  가중합산 여유
-0.05   200   202   302      allowed
+0.00   200   201   301           allowed   weighted sum has headroom
+0.05   200   202   302           allowed
 ...
-0.00   200   299   399      allowed
-0.00   200   300   400      allowed
+0.00   200   299   399           allowed
+0.00   200   300   400           allowed
 ...
-0.00   200   399   499      allowed
-0.00   200   400   500      allowed  limit 도달
-0.05   200   400   500+1    denied   초과
-0.10   199   400   500      allowed  prev 가중치 감소 → 1개 허용
-0.15   199   401   501      denied   다시 초과
+0.00   200   399   499           allowed
+0.00   200   400   500           allowed   limit reached
+0.05   200   400   500+1         denied    exceeded
+0.10   199   400   500           allowed   prev weight decreased → 1 allowed
+0.15   199   401   501           denied    exceeded again
 ...
 ```
 
-이전 윈도우 가중치가 시간에 따라 감소하면서, **간헐적으로 1~2개씩 허용**되는 패턴이 나타난다. Token bucket의 교차 패턴과 유사하지만, 메커니즘은 다르다.
+As the previous window's weight decreases over time, a pattern of **intermittently allowing a small number of requests** emerges. This is similar to the partial-throughput pattern of Token Bucket, but the mechanism is different.
 
-## 메트릭과의 관계
+## Relationship with Metrics
 
 ### `throttled_requests_total` (Counter)
 
 ```
-                     점진적 차단 (간헐 허용)
+                     Gradual throttling (intermittent allows)
                           ↓↓↓
 allowed ████████████████████▓▓▓▓▓▓▓▓▓████████
 denied                     ▓▓▓▓▓▓▓▓▓
         ──────────────────────────────────────── time
         Phase 1,2        Phase 3       Phase 4
-        가중합산 여유     limit 근처     가중합산 감소
+        Weighted sum     Near limit     Weighted sum
+        has headroom                    decreasing
 ```
 
-| 구간 | 가중 합산 | allowed rate | denied rate |
-|------|----------|-------------|-------------|
-| Normal (3 req/s) | ~180 (한도 이하) | 3/s | 0/s |
-| Ramp up (8 req/s) | 점진 증가 | 8/s | 0/s |
-| Burst (20 req/s) | limit 근처 진동 | ~8.33/s (fill_rate 수렴) | ~11.67/s |
-| Cool down (3 req/s) | 급격히 감소 | 3/s | 0/s |
+| Phase | Weighted Sum | allowed rate | denied rate |
+|-------|-------------|-------------|-------------|
+| Normal (3 req/s) | ~180 (below limit) | 3/s | 0/s |
+| Ramp up (8 req/s) | Gradual increase | 8/s | 0/s |
+| Burst (20 req/s) | Oscillating near limit | ~8.33/s over time (the configured 500/min rate) | ~11.67/s after the limiter reaches saturation |
+| Cool down (3 req/s) | Rapidly decreasing | 3/s | 0/s |
 
-Burst 구간의 allowed rate가 token bucket과 비슷하게 fill_rate에 수렴하지만, 그 이유가 다르다:
-- Token bucket: 토큰 보충 속도에 의해 결정
-- Sliding window: 이전 윈도우 가중치 감소 속도에 의해 결정
+The allowed rate during the saturated part of the Burst phase converges to the configured limit rate similarly to Token Bucket, but for a different reason:
+- Token bucket: Determined by the token replenishment rate, with whole-second batching in `throttled-py` 3.2.0
+- Sliding window: Determined by the rate at which the previous window's weight decreases
 
 ### `throttled_duration_seconds` (Histogram)
 
-두 개의 키를 조회하고 부동소수점 연산(가중 평균)을 수행하므로, 단순 카운터인 Fixed Window보다는 약간 느리다.
+Since it queries two keys and performs floating-point arithmetic (weighted average), it is slightly slower than Fixed Window which uses a simple counter.
 
 ```
 latency
@@ -191,25 +192,25 @@ latency
       ├──────────────────────────────────── time
 ```
 
-여전히 O(1) 연산이지만, GET 2회 + 부동소수점 곱셈이 추가되어 상수 계수가 더 크다.
+It is still an O(1) operation, but the constant factor is larger due to the additional 2 GETs + floating-point multiplication.
 
 ### Denied ratio (Gauge)
 
-| 구간 | 순간 차단률 | 특성 |
-|------|------------|------|
-| Normal / Ramp up | 0% | 가중 합산 여유 |
-| Burst | ~58% | token bucket과 유사한 비율 |
-| Cool down | 0% | 가중 합산 빠르게 감소 |
+| Phase | Instantaneous denial rate | Characteristics |
+|-------|--------------------------|-----------------|
+| Normal / Ramp up | 0% | Weighted sum has headroom |
+| Burst steady state | ~58% | Similar saturated ratio to Token Bucket |
+| Cool down | 0% | Weighted sum decreases rapidly |
 
-Fixed Window의 0%↔100% 계단 패턴이 아닌, **부드러운 곡선**이 나타난다. 이전 윈도우의 가중치가 점진적으로 감소하면서 차단률도 점진적으로 변화한다.
+Instead of the 0%/100% step pattern of Fixed Window, a **smooth curve** appears. As the previous window's weight decreases gradually, the denial rate also changes gradually.
 
-## 다른 알고리즘과의 차이
+## Differences from Other Algorithms
 
-| 특성 | Sliding Window | Fixed Window | Token Bucket |
-|------|---------------|--------------|--------------|
-| 윈도우 경계 | 매끄러움 (가중 평균) | 급격한 리셋 (2배 burst) | 해당 없음 |
-| Burst 패턴 | 점진적 차단 | 완전 차단 구간 | 교차 패턴 |
-| 정확도 | 가장 정확 | 경계에서 부정확 | 장기 평균 정확 |
-| 거부 시 상태 변경 | 없음 (카운터 불변) | 있음 (카운터 증가) | 없음 (토큰 불변) |
-| 저장 공간 | 카운터 2개 | 카운터 1개 | 필드 2개 |
-| 적합 용도 | 정밀한 rate limit, 공정한 트래픽 제어 | 단순 quota | 범용, burst 허용 |
+| Property | Sliding Window | Fixed Window | Token Bucket |
+|----------|---------------|--------------|--------------|
+| Window boundary | Smooth (weighted average) | Abrupt reset (2x burst) | N/A |
+| Burst pattern | Gradual throttling | Complete blocking periods | Batched graceful degradation |
+| Accuracy | Most accurate | Inaccurate at boundaries | Accurate long-term average |
+| State change on denial | None (counter unchanged) | Yes (counter incremented) | None (tokens unchanged) |
+| Storage space | 2 counters | 1 counter | 2 fields |
+| Suitable use case | Precise rate limiting, fair traffic control | Simple quota | General purpose, burst-tolerant |
